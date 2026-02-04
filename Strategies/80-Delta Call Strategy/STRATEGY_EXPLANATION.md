@@ -214,8 +214,49 @@ Total portfolio delta:    2,000 + 1,580 = 3,580
 | DTE at entry | 60, 90, 120, 150 | 120 | Balances decay vs. cost |
 | Profit target | 30%, 50%, 75%, 100% | 50% | Optimal risk/reward |
 | Max hold period | 30, 45, 60, 90 days | 60 | Avoids theta acceleration |
-| SMA period | 50, 100, 150, 200 | 200 | Most robust historically |
+| SMA period | 50, 100, 150, 200 | 200 | See detailed analysis below |
 | SMA exit threshold | 0%, 1%, 2%, 3% | 2% | Reduces whipsaws |
+
+### SMA Period Comparison: Detailed Analysis
+
+The choice of SMA period significantly impacts strategy performance. We tested four periods (50, 100, 150, 200 days) with all other parameters held constant.
+
+**Results:**
+
+| SMA | CAGR | Sharpe | Max DD | Trades | Win Rate | SMA Exits | Total P&L |
+|-----|------|--------|--------|--------|----------|-----------|-----------|
+| 50 | +13.5% | 0.80 | -32.5% | 1,004 | 51.3% | 477 | $328k |
+| 100 | +14.9% | 0.85 | -35.1% | 1,022 | 67.4% | 270 | $672k |
+| 150 | +15.3% | 0.88 | -32.5% | 1,074 | 70.8% | 205 | $803k |
+| 200 | +15.3% | 0.88 | -32.3% | 1,061 | 71.3% | 182 | $794k |
+
+**Key Finding: Shorter SMAs Generate Destructive Whipsaws**
+
+The SMA50 triggered 477 forced exits (vs. 182 for SMA200)—295 additional "whipsaw" trades where price briefly crossed below the SMA, forced an exit, then recovered. Each whipsaw:
+- Sells the option position (often at a loss due to time decay)
+- Pays the bid-ask spread on exit
+- Requires re-entry when price recovers (paying spread again)
+- Resets the profit target clock
+
+This whipsaw effect devastated the SMA50 results:
+- Win rate collapsed to 51.3% (barely better than a coin flip)
+- Lost $465,000 in P&L compared to SMA200
+- Gave up 1.8% annual CAGR
+
+**Diminishing Returns from Longer Periods**
+
+The improvement from extending the SMA period showed clear diminishing returns:
+- 50→100: Large improvement (+1.4% CAGR, +0.05 Sharpe, 207 fewer whipsaws)
+- 100→150: Meaningful improvement (+0.4% CAGR, +0.03 Sharpe, 65 fewer whipsaws)
+- 150→200: Marginal difference (same CAGR, same Sharpe, 23 fewer whipsaws)
+
+**Why We Chose SMA200**
+
+SMA150 and SMA200 performed nearly identically. We chose SMA200 because:
+1. **Fewest whipsaws** (182 vs. 205) - less trading friction
+2. **Highest win rate** (71.3% vs. 70.8%) - better behavioral experience
+3. **Best max drawdown** (-32.3% vs. -32.5%) - marginally better risk profile
+4. **Industry standard** - the 200-day moving average is widely followed, making it harder for others to front-run the signal
 
 ### Alternative Tickers Tested
 
