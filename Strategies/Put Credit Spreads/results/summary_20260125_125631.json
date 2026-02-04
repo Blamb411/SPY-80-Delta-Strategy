@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-01-25T17:56:31.549569Z",
+  "put_spread_metrics": {
+    "strategy_name": "Put Credit Spread",
+    "total_symbols": 19,
+    "symbols_with_trades": 5,
+    "total_trades": 12,
+    "winning_trades": 11,
+    "losing_trades": 1,
+    "total_pnl": 1970.8076357140467,
+    "avg_pnl_per_trade": 164.23396964283722,
+    "median_pnl": 96.93115158240424,
+    "std_pnl": 186.5068565334572,
+    "win_rate": 0.9166666666666666,
+    "avg_win": 181.56949923147283,
+    "avg_loss": -26.456855832154336,
+    "expectancy": 164.23396964283722,
+    "profit_factor": 75.49137751730974,
+    "max_drawdown": 26.45685583215436,
+    "max_drawdown_pct": 0.021063952531129478,
+    "sharpe_ratio": 3.0504141781949934,
+    "avg_theoretical_pop": 0.6848503446154196,
+    "realized_pop": 0.9166666666666666,
+    "pop_difference": 0.23181632205124703,
+    "details": {
+      "iv_bucket_stats": {
+        "low": {
+          "count": 6,
+          "pnl": 460.2580663401201,
+          "win_rate": 1.0
+        },
+        "medium": {
+          "count": 5,
+          "pnl": 1005.8698156009197,
+          "win_rate": 0.8
+        },
+        "high": {
+          "count": 1,
+          "pnl": 504.67975377300706,
+          "win_rate": 1.0
+        }
+      }
+    }
+  },
+  "condor_metrics": {
+    "strategy_name": "Iron Condor",
+    "total_symbols": 19,
+    "symbols_with_trades": 10,
+    "total_trades": 27,
+    "winning_trades": 11,
+    "losing_trades": 16,
+    "total_pnl": -1438.724358521198,
+    "avg_pnl_per_trade": -53.28608735263696,
+    "median_pnl": -75.88544194011195,
+    "std_pnl": 232.55264870947124,
+    "win_rate": 0.4074074074074074,
+    "avg_win": 175.60389653471435,
+    "avg_loss": -210.647951275191,
+    "expectancy": -53.286087352636955,
+    "profit_factor": 0.5731253408199408,
+    "max_drawdown": 1850.1022145746128,
+    "max_drawdown_pct": 13.324584307523775,
+    "sharpe_ratio": -0.7937489522781057,
+    "avg_theoretical_pop": 0.5392633039960258,
+    "realized_pop": 0.4074074074074074,
+    "pop_difference": -0.13185589658861846,
+    "details": {
+      "put_breaches": 3,
+      "call_breaches": 16,
+      "breach_ratio": 0.1875,
+      "iv_tier_stats": {
+        "medium": {
+          "count": 19,
+          "pnl": -797.2808958473845,
+          "win_rate": 0.47368421052631576
+        },
+        "high": {
+          "count": 4,
+          "pnl": -241.5463639126463,
+          "win_rate": 0.25
+        },
+        "very_high": {
+          "count": 4,
+          "pnl": -399.897098761167,
+          "win_rate": 0.25
+        }
+      }
+    }
+  },
+  "comparison": {
+    "better_strategy": "Put Credit Spread",
+    "better_by_pnl": 3409.5319942352444,
+    "better_by_winrate": 0.5092592592592593
+  },
+  "summary": "Put Spreads: 12 trades, 91.7% win rate, $1,971 total P&L, $164/trade\nIron Condors: 27 trades, 40.7% win rate, $-1,439 total P&L, $-53/trade\nBetter strategy: Put Credit Spread by $3,410"
+}

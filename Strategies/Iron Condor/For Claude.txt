@@ -1,0 +1,10 @@
+Here's the response I got from the Massive support people to the query you gave me to send to them:  Yes, your Options Advanced plan does include historical bid/ask quote data for options.
+The correct endpoint is /v3/quotes/{optionsTicker} with these parameters:
+optionsTicker: The options ticker (required)
+timestamp: Use date format YYYY-MM-DD or nanosecond timestamp
+You can also use timestamp filters like timestamp.gte for date ranges
+Historical data availability: Records go back to March 7, 2022.
+For your Python client, try this format:
+client.get_quotes(ticker="O:SPY240216P00480000", timestamp="2024-02-10")
+
+Note that the method might be get_quotes rather than list_quotes - check your Python client documentation for the exact method name for the quotes endpoint.

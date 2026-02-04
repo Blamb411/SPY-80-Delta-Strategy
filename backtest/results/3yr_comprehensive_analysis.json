@@ -1,0 +1,141 @@
+{
+  "generated_at": "2026-01-26T06:36:00Z",
+  "analysis_period": {
+    "start": "2023-01-25",
+    "end": "2026-01-23",
+    "years": 3.0,
+    "trade_period_start": "2023-11-10",
+    "trade_period_end": "2025-12-08",
+    "trade_period_years": 2.08
+  },
+  "data": {
+    "symbols": 191,
+    "bars_per_symbol": 752,
+    "total_symbol_days_analyzed": 98409
+  },
+  "strategy": {
+    "name": "Put Credit Spread with Early Exit",
+    "short_delta": -0.25,
+    "spread_width_pct": 0.05,
+    "dte": 30,
+    "entry_interval_days": 5,
+    "take_profit_pct": 0.50,
+    "stop_loss_pct": 0.75
+  },
+  "entry_filters": {
+    "price_above_200_sma": true,
+    "rsi_below_75": true,
+    "iv_rank_above_30_pct": true,
+    "filter_pass_rates": {
+      "price_above_sma": 0.598,
+      "rsi_below_max": 0.897,
+      "iv_rank_above_min": 0.519,
+      "all_filters_combined": 0.245
+    }
+  },
+  "pricing_assumptions": {
+    "use_volatility_skew": true,
+    "skew_slope": 0.0015
+  },
+  "bid_ask_sensitivity": {
+    "1_pct": {
+      "spread_pct": 0.01,
+      "trades": 6008,
+      "win_rate": 0.850,
+      "total_pnl": 106071,
+      "avg_pnl_per_trade": 17.65,
+      "sharpe_per_trade": 0.027,
+      "status": "PROFITABLE"
+    },
+    "2_pct": {
+      "spread_pct": 0.02,
+      "trades": 6008,
+      "win_rate": 0.846,
+      "total_pnl": 75384,
+      "avg_pnl_per_trade": 12.55,
+      "sharpe_per_trade": 0.008,
+      "status": "PROFITABLE"
+    },
+    "3_pct": {
+      "spread_pct": 0.03,
+      "trades": 6008,
+      "win_rate": 0.842,
+      "total_pnl": 37327,
+      "avg_pnl_per_trade": 6.21,
+      "sharpe_per_trade": -0.011,
+      "status": "MARGINAL"
+    },
+    "5_pct": {
+      "spread_pct": 0.05,
+      "trades": 6008,
+      "win_rate": 0.835,
+      "total_pnl": -39369,
+      "avg_pnl_per_trade": -6.55,
+      "sharpe_per_trade": -0.046,
+      "status": "LOSING"
+    },
+    "8_pct": {
+      "spread_pct": 0.08,
+      "trades": 6008,
+      "win_rate": 0.820,
+      "total_pnl": -175664,
+      "avg_pnl_per_trade": -29.24,
+      "sharpe_per_trade": -0.101,
+      "status": "LOSING"
+    },
+    "10_pct": {
+      "spread_pct": 0.10,
+      "trades": 6008,
+      "win_rate": 0.813,
+      "total_pnl": -236485,
+      "avg_pnl_per_trade": -39.36,
+      "sharpe_per_trade": -0.126,
+      "status": "LOSING"
+    }
+  },
+  "realistic_5pct_results": {
+    "total_trades": 6008,
+    "winning_trades": 5014,
+    "losing_trades": 994,
+    "win_rate": 0.835,
+    "total_pnl": -39369,
+    "avg_win": 150.85,
+    "avg_loss": -800.52,
+    "win_loss_ratio": 0.188,
+    "profit_factor": 0.95,
+    "expectancy": -6.55,
+    "max_capital_at_risk": 759095,
+    "max_drawdown": 123435,
+    "max_drawdown_pct": 0.163,
+    "annualized_roi": -0.025,
+    "sharpe_per_trade": -0.046,
+    "annualized_sharpe": -2.479,
+    "probabilistic_sharpe_ratio": 0.0
+  },
+  "conclusions": {
+    "strategy_viability": "The put credit spread strategy with 50% TP / 75% SL is ONLY profitable when trading highly liquid options with tight bid/ask spreads (<=3%).",
+    "profitable_instruments": [
+      "SPY options (typically 0.5-1% spread)",
+      "QQQ options (typically 1-2% spread)",
+      "Mega-cap stocks: AAPL, MSFT, NVDA, GOOGL, AMZN (1-3% spread)"
+    ],
+    "unprofitable_instruments": [
+      "Most single-stock options (5%+ spread)",
+      "Less liquid names (8-10% spread)",
+      "Small/mid-cap stocks"
+    ],
+    "key_insights": [
+      "High win rate (83-85%) does not guarantee profitability",
+      "Avg loss is 5.3x avg win - a few big losses wipe out many small wins",
+      "Transaction costs (bid/ask spread) are the dominant factor",
+      "IV skew makes OTM puts more expensive than ATM IV suggests",
+      "Short sample periods can be misleading - 27-day results were opposite of 3-year results"
+    ],
+    "recommendations": [
+      "Only trade this strategy on SPY, QQQ, or mega-cap stocks",
+      "Monitor actual bid/ask spreads before entering trades",
+      "Consider wider spreads (lower delta) to improve win rate",
+      "Paper trade extensively before using real capital"
+    ]
+  }
+}

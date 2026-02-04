@@ -1,0 +1,21 @@
+Rank,Symbol,Predictor Score,Sector,MCap,Price,3m%,6m%,12m%,Days as Strong Buy,Status,Qualifies (75d+)
+1,FLNC,75.0,Information Technology,$2.7B,$20,+101%,+59%,—,62 (since 12/1/2025),Active,No
+2,VIAV,75.0,Information Technology,$2.5B,$11,+58%,+47%,—,N/A,Changed to Hold 1/30,DISQUALIFIED
+3,LASR,74.0,Information Technology,$0.7B,$26,+73%,+152%,—,54 (since 12/9/2025),Active,No
+4,CENX,74.0,Materials,$2.3B,$27,+34%,+71%,—,N/A,Changed to Hold 1/30,DISQUALIFIED
+5,AMKR,73.5,Information Technology,$5.9B,$24,+24%,+16%,—,12 (since 1/20/2026),Active,No
+6,LITE,71.5,Information Technology,$4.6B,$64,+31%,+58%,—,55 (since 12/8/2025),Active,No
+7,CIEN,71.5,Information Technology,$13.2B,$88,+26%,+67%,—,62 (since 12/1/2025),Active,No
+8,COHR,71.5,Information Technology,$16.1B,$105,+33%,+40%,—,73 (since 11/20/2025),Active,No (close)
+9,CSTM,69.0,Industrials,$2.1B,$13,+51%,+43%,—,206 (since 7/10/2025),Active,YES
+10,TPC,69.0,Industrials,$1.2B,$78,+75%,+182%,—,5 (since 1/27/2026),Active,No
+11,STRL,68.5,Industrials,$6.3B,$202,+25%,+52%,—,9 (since 1/23/2026),Active,No
+12,WLDN,68.5,Industrials,$2.9B,$87,+26%,+72%,—,68 (since 11/25/2025),Active,No
+13,CHRW,67.0,Industrials,$14.2B,$114,+24%,+30%,—,3 (since 1/29/2026),Active,No
+14,IESC,66.0,Industrials,$4.9B,$251,+48%,+83%,—,16 (since 1/16/2026),Active,No
+15,SANM,65.5,Information Technology,$4.1B,$90,+19%,+25%,—,N/A,Changed to Hold 1/30,DISQUALIFIED
+16,CLS,65.0,Information Technology,$24.4B,$110,+26%,+53%,—,82 (since 11/11/2025),Active,YES
+17,GM,64.5,Consumer Discretionary,$58.7B,$54,+25%,+31%,—,101 (since 10/23/2025),Active,YES
+18,LQDA,64.0,Health Care,$2.3B,$27,+45%,+56%,—,54 (since 12/9/2025),Active,No
+19,ALGT,63.5,Industrials,$1.9B,$103,+15%,+40%,—,19 (since 1/13/2026),Active,No
+20,EVER,63.0,Financials,$1.1B,$56,+44%,+53%,—,89 (since 11/4/2025),Active,YES

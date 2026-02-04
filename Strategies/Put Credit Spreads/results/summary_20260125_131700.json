@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-01-25T18:17:00.856687Z",
+  "put_spread_metrics": {
+    "strategy_name": "Put Credit Spread",
+    "total_symbols": 199,
+    "symbols_with_trades": 49,
+    "total_trades": 106,
+    "winning_trades": 85,
+    "losing_trades": 21,
+    "total_pnl": 719.7283623162579,
+    "avg_pnl_per_trade": 6.789890210530735,
+    "median_pnl": 97.04690769670054,
+    "std_pnl": 1113.5627442152324,
+    "win_rate": 0.8018867924528302,
+    "avg_win": 247.31735514060307,
+    "avg_loss": -966.7736583159525,
+    "expectancy": 6.789890210530814,
+    "profit_factor": 1.0354506754120893,
+    "max_drawdown": 11707.848788474472,
+    "max_drawdown_pct": 1.0346439218459076,
+    "sharpe_ratio": 0.021122177234371778,
+    "avg_theoretical_pop": 0.6903844437591276,
+    "realized_pop": 0.8018867924528302,
+    "pop_difference": 0.11150234869370268,
+    "details": {
+      "iv_bucket_stats": {
+        "low": {
+          "count": 56,
+          "pnl": 9312.216422158259,
+          "win_rate": 0.8035714285714286
+        },
+        "medium": {
+          "count": 42,
+          "pnl": -2670.9524391564414,
+          "win_rate": 0.7857142857142857
+        },
+        "high": {
+          "count": 8,
+          "pnl": -5921.535620685552,
+          "win_rate": 0.875
+        }
+      }
+    }
+  },
+  "condor_metrics": null,
+  "comparison": {
+    "better_strategy": "Put Credit Spread",
+    "better_by_pnl": 719.7283623162579,
+    "better_by_winrate": 0.0
+  },
+  "summary": "Put Spreads: 106 trades, 80.2% win rate, $720 total P&L, $7/trade\nBetter strategy: Put Credit Spread by $720"
+}

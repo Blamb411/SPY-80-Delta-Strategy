@@ -1,0 +1,513 @@
+================================================================================
+SEEKING ALPHA PORTFOLIO ANALYSIS REPORT
+================================================================================
+Generated: 2026-01-29
+Data source: ProQuant History 1_29_2026.xlsx
+Price data: Massive (Polygon) API daily OHLCV for 155 symbols
+Analysis scripts: portfolio_analysis.py, daily_portfolio_analysis.py
+
+
+================================================================================
+BACKGROUND: SEEKING ALPHA SERVICES
+================================================================================
+
+Alpha Picks
+-----------
+- Launched mid-2022; stock recommendation service based on SA's Quant Ratings
+- 2 picks per month (1st and 15th)
+- Selection criteria: must maintain "Strong Buy" Quant Rating for 75+ consecutive
+  days, US common stocks, market cap >$500M, share price >$10, no REITs
+- Quant system factors: Value, Growth, Profitability, Momentum, EPS Revisions
+  across ~5,000 stocks
+- Style: buy-and-hold; exit signals sent when ratings change
+- Founded by Steven Cress
+- SA-reported performance: +284% total return vs +83% SPY since launch (Dec 2025)
+- Pricing: $449/year
+
+PRO Quant Portfolio (PQP)
+-------------------------
+- Launched June 2025; much newer than Alpha Picks
+- Top 30 stocks scored across Value, Growth, Profitability, Momentum, EPS Revisions
+- GARP-plus strategy; includes ADRs and all market caps (no restrictions)
+- Equal-weight, fixed-capital approach
+- Rebalances every Monday at NYSE open using Friday closing prices
+- ~2-3 trades per week; stocks rated "Hold" are removed each Monday
+- SA-reported performance: +38.93% in first 6 months vs +6.72% for S&P 500 EWI
+  (as of Nov 2025)
+- Available only to Seeking Alpha PRO subscribers
+- Model portfolio only (not a real brokerage account)
+
+Key Difference: Alpha Picks is passive (accumulate 2 stocks/month, hold).
+PQP is active (30-stock portfolio rebalanced weekly with frequent rotation).
+
+
+================================================================================
+RESEARCH SOURCES
+================================================================================
+
+Alpha Picks:
+- Alpha Picks Review (Wall Street Survivor, Jan 2026):
+  https://www.wallstreetsurvivor.com/alpha-picks-review/
+- Alpha Picks Review (How The Market Works):
+  https://www.howthemarketworks.com/advanced/charts-and-patterns/seeking-alpha-alpha-picks-review/
+- Seeking Alpha Picks & Premium Test, Rating & Benchmark 2026 (Great Work Life):
+  https://www.greatworklife.com/seeking-alpha-review/
+- Alpha Picks Review 2026 (Match My Broker):
+  https://www.matchmybroker.com/tools/alpha-picks-by-seeking-alpha-review
+- Is Seeking Alpha Worth It? (Wall Street Survivor, Jan 2026):
+  https://www.wallstreetsurvivor.com/is-seeking-alpha-worth-it/
+
+PRO Quant Portfolio:
+- Seeking Alpha Launches PRO Quant Portfolio (Yahoo Finance, Jun 2025):
+  https://finance.yahoo.com/news/seeking-alpha-launches-pro-quant-130000566.html
+- Inside the PRO Quant Portfolio (Seeking Alpha):
+  https://seekingalpha.com/article/4824424-inside-the-pro-quant-portfolio
+- Seeking Alpha PRO Review (Stock Analysis):
+  https://stockanalysis.com/article/seeking-alpha-pro-review/
+- PRO Quant Portfolio About Page (Seeking Alpha):
+  https://seekingalpha.com/pro-quant-portfolio/about
+- Seeking Alpha PRO Review (Ticker Nerd):
+  https://tickernerd.com/resources/seeking-alpha-pro/
+
+
+================================================================================
+ANALYSIS METHODOLOGY
+================================================================================
+
+Data Collection:
+- Excel spreadsheet with two tabs: ProQuant (1,108 rows of weekly rebalancing
+  actions) and AlphaPicks (97 picks from Jul 2022 to Jan 2026)
+- Fetched daily OHLCV prices for all 155 unique symbols + SPY from Massive API
+- Prices cached in local SQLite database (price_cache.db)
+
+Alpha Picks Portfolio Simulation:
+- Equal dollar investment ($1,000) per pick on pick date
+- Shares = $1,000 / buy_price at entry
+- Position held until close date (if closed) or end of analysis period
+- Portfolio value = sum of all active positions valued at daily close
+- Daily return = change in total portfolio value
+- 97 picks total, max 49 concurrent positions
+
+ProQuant Portfolio Simulation:
+- Weight-based daily returns: on each rebalance date, record portfolio weights
+  from Excel; between rebalances, compute daily portfolio return as weighted
+  average of individual stock daily returns
+- Equal-weight ~30 stocks, rebalanced weekly
+- Starting value $10,000
+
+Risk Metrics:
+- Sharpe Ratio: annualized (mean/std * sqrt(252)) from daily returns
+- Sortino Ratio: annualized using downside deviation only
+- Calmar Ratio: annualized return / max drawdown
+- Probabilistic Sharpe Ratio (PSR): Bailey & Lopez de Prado (2012), probability
+  that true Sharpe exceeds benchmark, adjusting for skewness and kurtosis
+- Minimum Track Record Length (minTRL): observations needed for 95% confidence
+  that Sharpe > 0
+
+
+================================================================================
+RESULTS: ALPHA PICKS (Jul 2022 - Jan 2026)
+================================================================================
+
+Portfolio Summary:
+  Trading Days:          897
+  Total Invested:        $97,000 (97 picks x $1,000)
+  Final Value:           $103,846
+  Total Profit:          $6,846
+  Total Return:          +1,980% (portfolio value growth from initial positions)
+  Annualized Return:     +158%
+  Annualized Volatility: 44.3%
+  Max Drawdown:          38.5% (2025-01-22 to 2025-04-04)
+
+Risk-Adjusted Metrics:
+  Sharpe Ratio:          2.1451
+  Sortino Ratio:         4.0544
+  Calmar Ratio:          4.0979
+
+Distribution:
+  Skewness:              1.5427 (positive: right tail fatter, large gains)
+  Excess Kurtosis:       14.1545 (very heavy tails)
+  Up Days:               512 (57.1%), Avg +1.95%
+  Down Days:             385 (42.9%), Avg -1.71%
+  Best Day:              +23.81%
+  Worst Day:             -13.44%
+
+Probabilistic Sharpe Ratio:
+  PSR(SR > 0.0):         100.0%  (virtually certain positive Sharpe)
+  PSR(SR > 0.5):         100.0%
+  PSR(SR > 1.0):         99.0%   (99% prob true Sharpe exceeds 1.0)
+  PSR(SR > 1.5):         90.6%
+  PSR(SR > 2.0):         61.6%
+
+Min Track Record Length: 128 days (have 897 -- SUFFICIENT)
+
+SPY Benchmark (same period):
+  Total Return:          +81.43%
+  Annualized Return:     +19.85%
+  Sharpe Ratio:          1.0888
+  Max Drawdown:          19.00%
+
+Per-Pick Statistics:
+  Average pick return:   +115.5%
+  Median pick return:    +27.7%
+  Win rate (> 0%):       73.2% (71/97)
+  Beat SPY rate:         55.7% (54/97)
+  Doubles (100%+):       25 picks
+  Big losers (-30%+):    10 picks
+  Average holding period: 467 days
+
+Monthly Returns:
+  Year    Jan    Feb    Mar    Apr    May    Jun    Jul    Aug    Sep    Oct    Nov    Dec   Annual
+  2022                                             +30%   +35%   +23%   +39%   +20%   +1%   +262%
+  2023   +22%    +6%    +5%    +5%   +10%   +21%   +14%    -1%    +3%    -5%   +23%   +16%  +196%
+  2024   +15%   +20%    -5%    -4%   +10%    +4%    -1%    -6%    +7%    +3%   +21%    -8%   +64%
+  2025   +11%   -20%   -11%    +6%   +16%    +7%   +11%    +7%   +18%    -8%   -11%    -3%   +13%
+  2026    +5%                                                                                 +5%
+
+Annual Risk Metrics:
+  2022: Return +262%  Sharpe 3.92  Sortino 45.49  MaxDD 12.5%  PSR(>0) 100%
+  2023: Return +196%  Sharpe 3.43  Sortino  7.23  MaxDD 12.3%  PSR(>0) 100%
+  2024: Return  +64%  Sharpe 1.51  Sortino  1.95  MaxDD 22.1%  PSR(>0)  93%
+  2025: Return  +13%  Sharpe 0.50  Sortino  0.48  MaxDD 38.5%  PSR(>0)  69%
+
+
+================================================================================
+RESULTS: PROQUANT PORTFOLIO (Jun 2025 - Jan 2026)
+================================================================================
+
+Portfolio Summary:
+  Trading Days:          167
+  Starting Value:        $10,000
+  Ending Value:          $13,971
+  Total Return:          +39.71%
+  Annualized Return:     +71.55%
+  Annualized Volatility: 26.60%
+  Max Drawdown:          14.71% (2025-10-06 to 2025-11-20)
+
+Risk-Adjusted Metrics:
+  Sharpe Ratio:          2.0311
+  Sortino Ratio:         2.6090
+  Calmar Ratio:          4.8644
+
+Distribution:
+  Skewness:              -0.1315 (near-symmetric)
+  Excess Kurtosis:       1.5176 (mild fat tails)
+  Up Days:               99 (59.3%), Avg +1.27%
+  Down Days:             68 (40.7%), Avg -1.32%
+  Best Day:              +5.79%
+  Worst Day:             -5.24%
+
+Probabilistic Sharpe Ratio:
+  PSR(SR > 0.0):         94.8%
+  PSR(SR > 0.5):         89.0%
+  PSR(SR > 1.0):         79.6%
+  PSR(SR > 1.5):         66.5%
+  PSR(SR > 2.0):         51.0%
+
+Min Track Record Length: 171 days (have 167 -- INSUFFICIENT, 4 days short)
+
+Portfolio Characteristics:
+  Avg stocks per week:   30
+  Unique stocks traded:  85
+  Total buys:            88
+  Total sells:           58
+  Avg turnover:          4.2 trades/week
+
+SPY Benchmark (same period):
+  Total Return:          +17.35%
+  Annualized Return:     +28.03%
+  Sharpe Ratio:          2.3211
+  Max Drawdown:          5.07%
+
+
+================================================================================
+SIDE-BY-SIDE COMPARISON
+================================================================================
+
+                    Alpha Picks  SPY (AP)    ProQuant    SPY (PQ)
+  ----------------------------------------------------------------
+  Trading Days            897       897         167         167
+  Total Return       +1,980%    +81.4%      +39.7%      +17.4%
+  Ann. Return         +158%     +19.9%      +71.6%      +28.0%
+  Ann. Volatility      44.3%     16.6%       26.6%       10.7%
+  Sharpe Ratio         2.145     1.089       2.031       2.321
+  Sortino Ratio        4.054     1.198       2.609       2.478
+  Calmar Ratio         4.098     1.045       4.864       5.528
+  Max Drawdown         38.5%     19.0%       14.7%        5.1%
+  Skewness             1.543     0.707      -0.132      -0.742
+  Excess Kurtosis     14.155    13.565       1.518       1.885
+  PSR(SR>0)           100.0%     98.2%       94.8%       96.3%
+  PSR(SR>1)            99.0%     56.8%       79.6%       84.5%
+  PSR(SR>2)            61.6%      4.0%       51.0%       59.7%
+
+Overlapping Period (Jun 2025 - Jan 2026):
+                    Alpha Picks  ProQuant      SPY
+  ------------------------------------------------
+  Total Return        +24.0%     +39.7%     +17.2%
+  Ann. Return         +47.1%     +71.6%     +27.6%
+  Sharpe               1.098      2.031      2.298
+  Max Drawdown         27.7%      14.7%       5.1%
+  PSR(SR>0)            79.8%      94.8%      96.2%
+
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. ALPHA PICKS HAS A STATISTICALLY SIGNIFICANT EDGE
+   - Sharpe of 2.14 with PSR(SR>1) = 99% over 897 days is strong
+   - Well exceeds minimum track record of 128 days
+   - Positive skewness (1.54) means the upside tail is larger than downside
+   - However, excess kurtosis of 14.15 means extreme moves in both directions
+
+2. ALPHA PICKS EDGE IS FADING
+   - Annual Sharpe: 3.92 (2022) -> 3.43 (2023) -> 1.51 (2024) -> 0.50 (2025)
+   - Max drawdown growing: 12.5% -> 12.3% -> 22.1% -> 38.5%
+   - 2025 PSR(SR>0) only 69% -- barely suggestive of positive performance
+   - Possible causes: strategy crowding as service grew, regime shift, mean reversion
+
+3. PROQUANT TOO NEW FOR DEFINITIVE CONCLUSIONS
+   - 167 days, 4 short of the 171-day minimum track record
+   - PSR(SR>0) = 94.8% is promising but not yet at 95% threshold
+   - Beat SPY in return (+40% vs +17%) but with 2.5x the volatility
+   - SPY actually had a BETTER Sharpe (2.32 vs 2.03) during this period
+
+4. BOTH STRATEGIES CARRY SIGNIFICANT RISK
+   - Alpha Picks volatility (44%) is 2.7x SPY
+   - ProQuant volatility (27%) is 2.5x SPY
+   - Alpha Picks max drawdown of 38.5% (early 2025) is double SPY's 19%
+   - Higher returns are compensation for higher risk, not purely "alpha"
+
+5. PORTFOLIO CONSTRUCTION MATTERS
+   - Total invested: $97,000 across 97 picks
+   - Final value: $103,846 -- only $6,846 in absolute profit
+   - The +1,980% "total return" reflects portfolio value growth from the
+     initial positions, heavily driven by early picks (APP, CLS, POWL, STRL)
+   - Later picks contribute less because early winners dominate portfolio weight
+   - This is a known issue with buy-and-hold equal-dollar portfolios
+
+
+================================================================================
+PICK-DAY EFFECT ANALYSIS
+================================================================================
+
+Scripts: pick_day_analysis.py
+
+ALPHA PICKS — ENTRY TIMING VERIFICATION
+-----------------------------------------
+Alpha Picks are disclosed at noon on the 1st and 15th of each month.
+The SA portfolio records the purchase at the "pick day" close price.
+
+  Buy price matches:
+    pick_day_close:   43% of picks
+    next_day_close:   22%
+    other:            29%
+    prev_day_close:    3%
+    next_day_open:     2%
+
+  Conclusion: SA uses the pick-day close price ~43% of the time, but
+  the match is inconsistent. Real investors buying after the noon
+  announcement would get approximately the pick-day close price.
+
+PICK-DAY ALPHA (announcement pop)
+-----------------------------------
+  The announcement itself moves the stock. Measuring from T-1 close:
+
+  Window               N    Avg Ret    Avg SPY   Excess   %>0    %>SPY
+  T-1 to T close      93   +2.16%     +0.01%   +2.15%    69%     65%
+  T-1 to T+1 close    93   +2.53%     +0.09%   +2.44%    62%     59%
+  T+1 to T+5          93   +0.89%     +0.20%   +0.69%    57%     55%
+  T+1 to T+20         93   +2.24%     +0.91%   +1.33%    58%     54%
+  T+1 to T+252        65  +33.97%    +19.75%  +14.22%    71%     57%
+
+  CRITICAL: The announcement day pop is GROWING year over year:
+    2022: +0.53% avg announcement pop (8 picks)
+    2023: +1.47% avg announcement pop (24 picks)
+    2024: +2.43% avg announcement pop (24 picks)
+    2025: +4.13% avg announcement pop (24 picks)
+
+  This is the smoking gun for Sharpe decay: as subscriber count grows,
+  more people front-run the picks, consuming the alpha at entry.
+
+INVESTOR TIMING COMPARISON
+-----------------------------
+  Entry timing matters. Total profit on $1,000 per pick:
+
+    Entry Timing              N    Avg Ret    Total $
+    Pick day close (noon)    93   +119.3%   $110,968  <- best for investor
+    SA stated price          90   +115.5%   $103,929  <- SA portfolio
+    Next day open            93   +114.9%   $106,861
+    Next day close           93   +113.1%   $105,204
+    T+5 close (wait a week)  91   +110.2%   $100,297
+
+  Cost of waiting even 1 day vs noon execution: ~$4K on $97K invested.
+
+PROQUANT — ENTRY TIMING VERIFICATION
+---------------------------------------
+  Rebalance dates fall on Fridays and Mondays (~50/50 split).
+  Buy price matches exact date close 81% of the time.
+
+  Friday close to Monday open gap (Buy stocks):
+    Avg gap: +1.87%
+    Positive (stock gapped up): 71% of the time
+    -> Investor pays more at Monday open than stated Friday close entry
+
+
+================================================================================
+EXIT STRATEGY BACKTESTER RESULTS
+================================================================================
+
+Script: alpha_picks_backtester.py
+
+Tested 21 strategy variants on Alpha Picks. All use $1,000 per pick,
+same picks and entry dates. Only exit rules change.
+
+TOP STRATEGIES (ranked by Sharpe):
+
+  #  Strategy                    Sharpe    PSR   Return   MaxDD   Ann.Ret
+  1  Vol-Adjusted Sizing          2.60   100%  +2149%   31.6%   +168%
+  2  Vol + SL25% + Trail30%       2.46   100%  +1610%   24.6%   +143%
+  3  Vol + SL20% + Trail25%       2.43   100%  +1420%   21.1%   +134%
+  4  BASELINE (SA exits only)     2.29   100%  +1980%   38.5%   +158%
+  5  SL25% + Trail30%             2.19   100%  +1544%   30.9%   +138%
+
+KEY FINDINGS FROM EXIT STRATEGIES:
+  - Vol-adjusted sizing is the clear winner: +0.31 Sharpe over baseline
+    with LESS drawdown (31.6% vs 38.5%)
+  - Stop losses HURT total returns (cut momentum winners too early)
+  - Trailing stops also hurt: they exit during normal pullbacks in
+    multi-bagger stocks like APP (+1,300%), CLS (+700%), POWL (+400%)
+  - Max holding periods reduce returns without improving Sharpe
+  - BEST COMBO: vol-adjusted sizing alone (inverse vol weighting,
+    target 1% daily risk per position, capped at 3x base)
+
+SHARPE RATIO DECAY ANALYSIS
+------------------------------
+  Annual Sharpe decomposition confirms the fade:
+
+  Year  AP Sharpe  AP Vol   AP Ret   SPY Sharpe  Ann.Pop  Picks
+  2022     3.92    36.1%   +262%       0.56      +0.53%     8
+  2023     3.43    43.7%   +196%       1.13      +1.47%    24
+  2024     1.51    47.9%    +64%       1.52      +2.43%    24
+  2025     0.50    44.2%    +13%       1.22      +4.13%    24
+
+  The correlation between growing announcement pop and declining Sharpe
+  is clear. As more subscribers front-run picks, less alpha remains for
+  the holding period. Volatility has also increased over time.
+
+  Rolling 6-month Sharpe shows the deterioration is continuous, not
+  step-function. The strategy has been in decline since mid-2023.
+
+
+================================================================================
+SECTOR & FACTOR ATTRIBUTION
+================================================================================
+
+Script: factor_attribution.py
+
+SECTOR ATTRIBUTION
+--------------------
+  Sector           Picks  Avg Ret  Excess   Beat%  $ Contribution
+  Technology         17   +234%   +198%     71%      44% of total
+  Industrials         9   +239%   +220%     67%      31% of total
+  Consumer Disc       8    +53%    +25%     63%       5% of total
+  Materials           6    +77%    +45%     50%       5% of total
+  Energy             10    +32%    +16%     60%       4% of total
+
+  Top two sectors (Tech + Industrials) contribute 75% of all returns.
+  This is high concentration risk.
+
+  Sector by Year (average return):
+    Technology:   +424% (2022) → +250% (2023) → +117% (2024) → +35% (2025)
+    Industrials:  +547% (2022) → +163% (2023) → +107% (2024) → N/A (2025)
+  Both declining in line with overall Sharpe decay.
+
+SIZE FACTOR
+-------------
+  Size     Picks  Avg Ret  Med Ret  Excess
+  Small      32   +65.5%   +16%    +33.3%
+  Mid        22   +166%    +50%   +122.1%
+  Large      29   +36.1%    +4%     +8.7%
+
+  Mid-cap is the sweet spot: highest excess return (+122%) and strong
+  average returns. Large-cap picks barely beat SPY. This is consistent
+  with the SA selection criteria (Strong Buy 75+ days favors mid-caps
+  where analyst coverage is thin and quant ratings have more signal).
+
+MOMENTUM FACTOR
+-----------------
+  Pre-entry 60-day momentum vs subsequent return:
+
+  Tercile              N    Avg Pre-Mom  Avg Ret  Avg Excess  Win%
+  Low Mom (bottom)    29    -11.1%      +56.6%    +41.8%     72%
+  Mid Mom (middle)    29    +10.7%     +100.1%    +57.9%     76%
+  High Mom (top)      30    +37.3%     +188.9%    +81.5%     73%
+
+  High-momentum stocks produce the best subsequent returns, but the
+  linear correlation is weak (0.075). The SA requirement for "Strong
+  Buy for 75+ days" inherently selects momentum stocks.
+
+VOLATILITY FACTOR
+-------------------
+  Pre-entry 20-day annualized vol vs subsequent return:
+
+  Tercile              N    Avg Vol    Avg Ret  Avg Excess  Win%
+  Low Vol (bottom)    29     18%      +72.1%    +49.2%     83%
+  Mid Vol (middle)    29     30%     +127.5%    +70.8%     69%
+  High Vol (top)      30     53%     +145.4%    +76.6%     66%
+
+  Higher vol → higher return, consistent with a risk premium. But
+  low-vol has the highest win rate (83%). The correlation is weak (0.098).
+
+MULTI-FACTOR SUMMARY
+-----------------------
+  Factor                  Top Tercile Excess   Key Finding
+  Sector (Tech)           +198%                Dominates returns
+  Sector (Industrials)    +220%                Second largest contributor
+  Size (Mid-Cap)          +122%                Sweet spot for alpha
+  Momentum (High)         +81.5%               Weak linear relationship
+  Volatility (High)       +76.6%               Risk premium, not alpha
+
+  Implications for building our own model:
+  - Technology and Industrials in mid-cap range drive most alpha
+  - Momentum is selected for implicitly via the 75-day Strong Buy rule
+  - High vol contributes returns but also contributes to drawdowns
+  - A custom model should screen for mid-cap Tech/Industrial momentum stocks
+    with strong quant fundamentals
+
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. IBKR AUTOMATION
+   - Build automated execution at noon on 1st/15th using ib_insync
+   - Pre-compute vol-adjusted position sizes for all Strong Buy candidates
+   - Monitor SA Strong Buy list to predict upcoming picks
+
+2. CUSTOM QUANT MODEL
+   - Replicate SA's five-factor approach (Value, Growth, Profitability,
+     Momentum, EPS Revisions) using publicly available fundamental data
+   - Focus on mid-cap Technology and Industrials
+   - Use the SA picks as training data to calibrate factor weights
+   - Backtest custom model against Alpha Picks historical performance
+
+3. ONGOING MONITORING
+   - Track announcement pop trend (currently +4.13% and growing)
+   - If pop exceeds ~5%, the strategy may have negative alpha after costs
+   - ProQuant needs ~4 more days to reach statistical significance
+
+
+================================================================================
+FILES IN THIS DIRECTORY
+================================================================================
+
+ProQuant History 1_29_2026.xlsx  - Source data from Seeking Alpha
+price_cache.db                  - SQLite cache of daily prices (155 symbols)
+fetch_prices.py                 - Massive API price fetcher
+portfolio_analysis.py           - Initial analysis (weekly ProQuant, pick-level AP)
+daily_portfolio_analysis.py     - Full daily simulation with proper Sharpe/PSR
+pick_day_analysis.py            - Pick-day effect and announcement timing analysis
+alpha_picks_backtester.py       - Configurable exit strategy backtester
+factor_attribution.py           - Sector and factor attribution analysis
+analysis_report.txt             - This file
