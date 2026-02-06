@@ -101,17 +101,28 @@ OPEN_POSITIONS = [
         entry_price=51.60,
         notes="First trade - 73 delta at entry"
     ),
-    # Add more positions as needed:
-    # Position(
-    #     account="Taxable",
-    #     entry_date="2026-02-05",
-    #     symbol="SPY",
-    #     strike=655,
-    #     expiration="2026-06-18",
-    #     right="C",
-    #     quantity=5,
-    #     entry_price=55.00,
-    # ),
+    Position(
+        account="IRA",
+        entry_date="2026-02-04",
+        symbol="SPY",
+        strike=650,
+        expiration="2026-05-29",
+        right="C",
+        quantity=10,
+        entry_price=55.41,
+        notes="Second trade - down day entry"
+    ),
+    Position(
+        account="IRA",
+        entry_date="2026-02-06",
+        symbol="SPY",
+        strike=655,
+        expiration="2026-05-15",
+        right="C",
+        quantity=10,
+        entry_price=49.70,
+        notes="Third trade - 76 delta, missed down day entry"
+    ),
 ]
 
 
@@ -177,24 +188,41 @@ def get_option_price(ib: IB, symbol: str, expiration: str, strike: float,
 
 
 def estimate_option_price(spot: float, strike: float, dte: int,
-                          entry_price: float) -> float:
+                          entry_price: float, iv: float = 0.18,
+                          rate: float = 0.045) -> float:
     """
-    Estimate current option price based on intrinsic value + time decay.
-    This is a rough approximation when IBKR is not available.
+    Estimate current option price using Black-Scholes.
+    This is used when IBKR is not available.
+
+    Args:
+        spot: Current underlying price
+        strike: Option strike price
+        dte: Days to expiration
+        entry_price: Original entry price (used as sanity check)
+        iv: Implied volatility estimate (default 18% for SPY)
+        rate: Risk-free rate
+
+    Returns:
+        Estimated option price
     """
-    intrinsic = max(0, spot - strike)
+    # Handle expired or near-expiry options
+    if dte <= 0:
+        return max(0, spot - strike)
 
-    # Estimate time value decay (simplified)
-    # Assume entry had certain time value, decay it linearly
-    entry_intrinsic = max(0, spot * 0.98 - strike)  # Rough estimate
-    entry_time_value = entry_price - entry_intrinsic
+    t = dte / 365.0
+    sqrt_t = math.sqrt(t)
 
-    # Time value decays, but not linearly - use sqrt approximation
-    original_dte = 135  # Approximate DTE at entry
-    time_factor = math.sqrt(dte / original_dte) if original_dte > 0 else 0
-    current_time_value = entry_time_value * time_factor
+    # Black-Scholes for call
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * t) / (iv * sqrt_t)
+    d2 = d1 - iv * sqrt_t
 
-    return intrinsic + max(0, current_time_value)
+    # Standard normal CDF approximation
+    def norm_cdf(x):
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+    call_price = spot * norm_cdf(d1) - strike * math.exp(-rate * t) * norm_cdf(d2)
+
+    return max(0, call_price)
 
 
 # ============================================================================
@@ -360,9 +388,31 @@ def main():
             print()
 
     if not spot:
-        # Fallback estimate
-        spot = 687.0  # Update this manually if needed
-        print(f"Using estimated SPY price: ${spot:.2f}")
+        # Try ThetaData as fallback
+        try:
+            import sys
+            import os
+            _this_dir = os.path.dirname(os.path.abspath(__file__))
+            _project_dir = os.path.dirname(os.path.dirname(_this_dir))
+            sys.path.insert(0, _project_dir)
+            from backtest.thetadata_client import ThetaDataClient
+            from datetime import timedelta
+
+            client = ThetaDataClient()
+            if client.connect():
+                end_date = date.today().strftime("%Y-%m-%d")
+                start_date = (date.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+                spy_bars = client.fetch_spy_bars(start_date, end_date)
+                if spy_bars:
+                    spot = spy_bars[-1]["close"]
+                    print(f"SPY Price (ThetaData): ${spot:.2f}")
+                client.close()
+        except Exception as e:
+            pass
+
+        if not spot:
+            spot = 680.0  # Conservative fallback
+            print(f"Using fallback SPY price: ${spot:.2f}")
         print()
 
     # Get prices for each position
