@@ -457,6 +457,47 @@ We tested adding an RSI(14) filter to avoid buying calls when the market is "ove
 
 **Note on RSI for Indexes vs. Individual Stocks:** Our testing suggests RSI may not be a meaningful timing indicator for broad market indexes like SPY. Indexes tend to trend persistently, so "overbought" often indicates strong momentum rather than imminent reversal. RSI may be more useful for mean-reverting individual stocks, but this hypothesis would require separate testing.
 
+### 7. Buying Puts When Below SMA200
+
+We tested buying 80-delta puts when SPY falls below SMA200, hypothesizing that we could profit from declining markets rather than sitting in cash.
+
+**Table 8: Puts Below SMA200 Test** (Combined portfolio, 2015-2026)
+
+| Strategy | CAGR | Sharpe | Sortino | Max DD | Put Trades | Put Win Rate | Put P&L |
+|----------|------|--------|---------|--------|------------|--------------|---------|
+| Calls only (baseline) | +15.3% | 0.877 | 1.115 | -32.3% | — | — | — |
+| Calls + Puts | +14.4% | 0.842 | 1.052 | -30.3% | 253 | 34.0% | -$176k |
+
+**Rejected** because:
+- Put trades had only 34% win rate and lost $176,432 total
+- Overall CAGR dropped by 0.9% and Sharpe by 0.035
+- Markets below SMA200 often grind sideways or bounce rather than continuing down
+- Time decay eats into put positions during consolidation periods
+- The original approach (cash during downtrends) is more effective than directional puts
+
+**Conclusion:** Stay in cash below SMA200 rather than betting on further declines. Bear markets are unpredictable—sideways grinds and sharp rebounds make put-buying unprofitable.
+
+### 8. Tail Risk Hedging with Rolling Puts
+
+We tested using rolling 5-delta puts (~95% OTM, ~90 DTE) as portfolio insurance against tail risk events.
+
+**Table 9: Tail Risk Hedge Test** (Combined portfolio, 2015-2026)
+
+| Strategy | CAGR | Sharpe | Sortino | Max DD | Hedge Trades | Hedge P&L | Hedge Cost |
+|----------|------|--------|---------|--------|--------------|-----------|------------|
+| No hedge (baseline) | +15.30% | 0.877 | 1.115 | -32.3% | — | — | — |
+| Always hedge | +15.29% | 0.880 | 1.121 | -31.8% | 64 | -$5,624 | $10,859 |
+| Tactical (near SMA only) | +15.30% | 0.877 | 1.116 | -32.2% | 76 | -$1,066 | $9,745 |
+
+**Rejected** because:
+- The "always hedge" approach showed negligible improvement: +0.003 Sharpe, -0.5% max DD
+- Differences are within noise range—not statistically significant
+- 5-delta puts are so far OTM they don't provide meaningful protection during typical crashes
+- The hedge cost (~$11k over 10 years) wasn't justified by risk reduction
+- The SMA200 exit rule already provides crash protection by forcing exit during downtrends
+
+**Conclusion:** Tail hedging with 5-delta puts is not cost-effective. The SMA200 filter serves as de facto tail protection by exiting leveraged positions before crashes fully develop.
+
 ---
  
 ## What We Incorporated
@@ -709,6 +750,8 @@ The backtesting framework consists of several Python programs:
 | `down_day_scaled_test.py` | Tests 2x/3x position sizing on down days |
 | `extended_entry_zone_test.py` | Tests buying in buffer zone (SMA to 2% below) |
 | `rsi_filter_test.py` | Tests RSI filter to avoid overbought entries (rejected) |
+| `puts_below_sma_test.py` | Tests buying puts when below SMA200 (rejected) |
+| `tail_hedge_test.py` | Tests rolling 5-delta puts as tail risk hedge (rejected) |
 
 ### Monitoring and Execution
 
@@ -904,3 +947,5 @@ It is not appropriate for investors who:
 - **Table 5:** Extended Entry Zone Test
 - **Table 6:** RSI Filter Test
 - **Table 7:** Weekly vs Monthly Expirations
+- **Table 8:** Puts Below SMA200 Test
+- **Table 9:** Tail Risk Hedge Test
