@@ -285,6 +285,50 @@ We analyzed whether entry conditions affected outcomes:
 - Tested whether market valuation predicted trade outcomes
 - Finding: No significant relationship in our timeframe
 
+### Entry Timing Experiments
+
+**1. Down-Day Entry Strategy**
+
+We tested buying calls only on "down days" (when SPY closes lower than the prior day), hypothesizing that buying after pullbacks might improve entry prices.
+
+*Initial test (same position size):*
+| Strategy | CAGR | Sharpe | Trades | Win Rate | P&L |
+|----------|------|--------|--------|----------|-----|
+| Original (daily) | 15.3% | 0.877 | 1,062 | 71.3% | $800k |
+| Down-day only | 14.3% | 0.893 | 591 | 72.3% | $627k |
+
+Better per-trade quality (higher Sharpe, win rate) but fewer trades reduced total P&L.
+
+*Scaled position test (equal capital deployment):*
+
+To fairly compare, we tested buying 2x or 3x contracts on down days:
+
+| Strategy | CAGR | Sharpe | Trades | Total P&L | SMA Exits |
+|----------|------|--------|--------|-----------|-----------|
+| Original | 15.3% | 0.877 | 1,062 | $800k | 182 |
+| Down-day 2x | 15.2% | 0.891 | 506 | $779k | 119 |
+| Down-day 3x | 15.7% | 0.891 | 417 | $896k | 77 |
+
+**Finding:** Down-day 3x is a legitimate improvement—higher CAGR, better Sharpe, fewer trades, fewer whipsaw exits, and higher total P&L. This approach is worth pursuing as an enhancement.
+
+**2. Extended Entry Zone Test**
+
+We tested whether continuing to buy calls when spot is in the "buffer zone" (between SMA and 2% below SMA) would reduce whipsaws.
+
+*Hypothesis:* If we keep buying during mild pullbacks rather than stopping at the SMA, we might accumulate more positions before exiting, reducing the whipsaw problem.
+
+| Strategy | CAGR | Sharpe | Trades | SMA Exits | Buffer Trades |
+|----------|------|--------|--------|-----------|---------------|
+| Original (above SMA only) | 15.3% | 0.877 | 1,062 | 182 | 0 |
+| Extended (to 2% below) | 15.3% | 0.873 | 1,132 | 229 | 77 |
+
+**Finding:** REJECTED. The extended zone made things worse:
+- 47 more SMA exits (+26%), not fewer
+- Buffer zone entries had only 32.5% win rate vs 71.8% for above-SMA entries
+- Buffer zone mean return only +3.0% vs +14.2% for above-SMA entries
+
+The original logic is sound: when price falls below SMA, the trend is weakening. Buying in the buffer zone is catching a falling knife—those entries often proceed to the exit threshold.
+
 ---
 
 ## What We Rejected
@@ -323,6 +367,27 @@ We tested exiting options that fell 30%, 50%, etc. **Rejected** because:
 - The SMA exit rule already provides portfolio-level protection
 - Win rate declined without improving total return
 
+### 6. RSI Filter (Avoid Overbought Entries)
+
+We tested adding an RSI(14) filter to avoid buying calls when the market is "overbought" (RSI > 70 or > 80). The hypothesis was that avoiding entries during short-term overextension might reduce drawdowns.
+
+**Results (2015-2026 backtest):**
+
+| Filter | CAGR | Sharpe | Max DD | Trades | Total P&L |
+|--------|------|--------|--------|--------|-----------|
+| No RSI filter (base) | +15.3% | 0.88 | -32.3% | 1,062 | $800k |
+| RSI < 70 | +14.9% | 0.87 | -32.9% | 902 | $684k |
+| RSI < 80 | +15.0% | 0.86 | -33.3% | 1,008 | $710k |
+
+**Rejected** because:
+- RSI filter reduced returns without improving risk metrics
+- Max drawdown actually *increased* with the filter (missed entries during strong rallies that would have cushioned drawdowns)
+- The SMA200 filter already captures trend effectively—average entry RSI was 59.6, not extreme
+- SPY trends persistently; "overbought" often means "strong momentum" rather than imminent reversal
+- Adding RSI creates another parameter to optimize (overfitting risk) with no demonstrated benefit
+
+**Conclusion:** The SMA200 trend filter is sufficient. RSI adds complexity without improving risk-adjusted returns.
+
 ---
 
 ## What We Incorporated
@@ -359,6 +424,17 @@ We only use standard monthly options (third Friday expiration) rather than weekl
 - Higher liquidity (tighter bid-ask spreads)
 - Lower transaction costs
 - Sufficient frequency for the strategy
+
+### 7. Potential Enhancement: Down-Day Entry with Scaling (Under Consideration)
+
+Testing showed that buying only on down days with 3x position scaling may improve results:
+- CAGR: 15.7% vs 15.3% original
+- Sharpe: 0.891 vs 0.877 original
+- Fewer trades: 417 vs 1,062
+- Fewer whipsaw exits: 77 vs 182
+- Higher total P&L: $896k vs $800k
+
+This approach trades less frequently but in larger size when conditions are favorable (price pullback in an uptrend). Further study is warranted before incorporation into the core strategy.
 
 ---
 
@@ -453,6 +529,40 @@ The strategy can be scaled proportionally. A smaller investor might use:
   □ 60 days held → Sell
 ```
 
+### Live Trading Workflow
+
+The strategy includes automated daily monitoring tools.
+
+**Position Tracking (`monitor_positions.py`):**
+- Edit `OPEN_POSITIONS` list to add/remove positions
+- Run manually: `python monitor_positions.py`
+- Connects to IBKR TWS for live quotes (falls back to Black-Scholes estimates)
+- Displays P&L, delta exposure, days held, and profit target status
+
+**Daily Check (`daily_check.py`):**
+- Run manually: `python daily_check.py`
+- With live quotes: `python daily_check.py --quotes`
+- Checks: SMA200 filter status, entry signals, exit alerts for all positions
+
+**Automated Scheduling (Windows):**
+```
+# Run setup_scheduled_task.ps1 as administrator to create scheduled task
+# Task runs daily_check.py at 10:00 AM on weekdays
+# Logs saved to: Strategies/80-Delta Call Strategy/logs/
+```
+
+**Data Sources:**
+| Source | Data | When Used |
+|--------|------|-----------|
+| IBKR TWS | Live SPY price, option quotes | Market hours when TWS running |
+| ThetaData | EOD SPY price, historical data | Fallback when IBKR unavailable |
+| Black-Scholes | Option price estimates | Fallback when no live quotes |
+
+**IBKR Configuration:**
+- Port 7497 for TWS Paper Trading
+- Port 7496 for TWS Live Trading
+- Enable "Allow connections from localhost only" in TWS API settings
+
 ### Transaction Costs
 
 Estimated costs per trade:
@@ -493,14 +603,26 @@ The backtesting framework consists of several Python programs:
 | `analysis_trailing_returns.py` | Analyzes correlation with trailing 12-month returns |
 | `analysis_valuation.py` | Tests relationship with CAPE (valuation) ratio |
 | `screen_tickers.py` | Evaluates candidate tickers for liquidity and returns |
+| `sma_period_comparison.py` | Compares SMA50/100/150/200 filter performance |
+| `sma_distance_distribution.py` | Analyzes % of time SPY spends at various distances from SMA200 |
+
+### Entry Timing Tests
+
+| File | Purpose |
+|------|---------|
+| `down_day_entry_test.py` | Tests buying only on days SPY closes lower |
+| `down_day_scaled_test.py` | Tests 2x/3x position sizing on down days |
+| `extended_entry_zone_test.py` | Tests buying in buffer zone (SMA to 2% below) |
+| `rsi_filter_test.py` | Tests RSI filter to avoid overbought entries (rejected) |
 
 ### Monitoring and Execution
 
 | File | Purpose |
 |------|---------|
-| `monitor_positions.py` | Tracks current positions and alerts |
-| `position_alerts.py` | Sends notifications for exit conditions |
-| `ibkr_option_quotes.py` | Fetches live quotes from Interactive Brokers |
+| `monitor_positions.py` | Tracks current positions with P&L calculations and IBKR integration |
+| `daily_check.py` | Daily trading check: SMA filter, entry signals, exit alerts |
+| `run_daily_check.bat` | Windows batch wrapper for scheduled task automation |
+| `ibkr_option_quotes.py` | Fetches live option quotes from Interactive Brokers |
 
 ### Data Flow
 
@@ -674,4 +796,4 @@ It is not appropriate for investors who:
 
 ---
 
-*Document prepared February 2026. Backtest period: March 2015 - January 2026.*
+*Document prepared February 2026. Last updated February 7, 2026. Backtest period: March 2015 - January 2026.*
