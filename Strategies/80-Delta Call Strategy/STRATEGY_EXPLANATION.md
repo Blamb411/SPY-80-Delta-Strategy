@@ -495,12 +495,28 @@ Exiting by 60 days regardless of profit:
 
 ### 6. Monthly Expirations Only
 
-We only use standard monthly options (third Friday expiration) rather than weekly options because:
-- Higher liquidity (tighter bid-ask spreads)
-- Lower transaction costs
-- Sufficient frequency for the strategy
+We only use standard monthly options (third Friday expiration) rather than weekly options. We tested this assumption formally—see Table 7.
 
-**Note:** Weekly vs. monthly expirations have not been formally backtested. The monthly-only approach is based on liquidity considerations and the strategy's 60-day holding period. A formal comparison may be conducted in future testing.
+**Table 7: Weekly vs Monthly Expirations** (Combined portfolio)
+
+| Metric | Monthly | Weekly | Difference |
+|--------|---------|--------|------------|
+| CAGR | **+15.30%** | +13.66% | -1.65% |
+| Sharpe | **0.877** | 0.856 | -0.021 |
+| Sortino | **1.115** | 1.072 | -0.044 |
+| Max Drawdown | -32.3% | -30.9% | +1.3% |
+| Total Trades | 1,062 | 427 | -635 |
+| Win Rate | 71.3% | 76.6% | +5.3% |
+| Total P&L | **$799,770** | $354,969 | -$444,801 |
+| Missing Quote Days | 785 | 1,816 | +1,031 |
+
+**Why Monthly Wins:**
+
+The key finding is that weekly options have 2.3x more days with missing quotes (1,816 vs 785), indicating liquidity problems. This caused:
+- 635 fewer trades executed
+- $445,000 less total P&L
+
+Weekly's higher win rate (76.6%) is misleading—it reflects selection bias from only trading on the most liquid days. Monthly expirations provide consistent liquidity for reliable execution.
 
 ### 7. Potential Enhancement: Down-Day Entry with Scaling (Under Consideration)
 
@@ -887,3 +903,4 @@ It is not appropriate for investors who:
 - **Table 4:** Down-Day Entry - Scaled Position Size
 - **Table 5:** Extended Entry Zone Test
 - **Table 6:** RSI Filter Test
+- **Table 7:** Weekly vs Monthly Expirations
