@@ -10,18 +10,59 @@ The explanation is written for readers who are comfortable with mathematics and 
 
 ## Table of Contents
 
-1. [The Basic Idea](#the-basic-idea)
-2. [Key Concepts Explained](#key-concepts-explained)
-3. [How the Strategy Works](#how-the-strategy-works)
-4. [The Mathematics Behind It](#the-mathematics-behind-it)
-5. [What We Tested and Why](#what-we-tested-and-why)
-6. [What We Rejected](#what-we-rejected)
-7. [What We Incorporated](#what-we-incorporated)
-8. [Understanding the Risk-Adjusted Returns](#understanding-the-risk-adjusted-returns)
-9. [Implementation Details](#implementation-details)
-10. [The Software Components](#the-software-components)
-11. [Strategy Capacity and Scalability](#strategy-capacity-and-scalability)
-12. [Risks and Limitations](#risks-and-limitations)
+1. [Backtest Methodology](#backtest-methodology)
+2. [The Basic Idea](#the-basic-idea)
+3. [Key Concepts Explained](#key-concepts-explained)
+4. [How the Strategy Works](#how-the-strategy-works)
+5. [The Mathematics Behind It](#the-mathematics-behind-it)
+6. [What We Tested and Why](#what-we-tested-and-why)
+7. [What We Rejected](#what-we-rejected)
+8. [What We Incorporated](#what-we-incorporated)
+9. [Understanding the Risk-Adjusted Returns](#understanding-the-risk-adjusted-returns)
+10. [Implementation Details](#implementation-details)
+11. [The Software Components](#the-software-components)
+12. [Strategy Capacity and Scalability](#strategy-capacity-and-scalability)
+13. [Risks and Limitations](#risks-and-limitations)
+
+---
+
+## Backtest Methodology
+
+Before diving into the strategy details, here are the key assumptions used throughout our backtesting:
+
+### Portfolio Assumptions
+
+All backtests use a combined portfolio of:
+- **3,125 SPY shares** (~$1.9M at current prices) as the buy-and-hold foundation
+- **$100,000 options cash allocation** for the 80-delta call strategy
+
+The $100,000 options allocation is discretionary and can be scaled based on risk tolerance. We chose this ratio (~5% options to ~95% shares) as a conservative starting point. Investors seeking more aggressive returns could increase the options allocation, while those seeking lower volatility could decrease it.
+
+### Position Sizing in Backtests vs. Live Trading
+
+**In backtests:** We enter 1 contract per signal for simplicity and to avoid overfitting position sizing rules. This allows clean measurement of signal quality.
+
+**In live trading:** Position sizes are scaled to the actual portfolio. For example, with a larger options allocation, you might enter 10 contracts per signal instead of 1. The key constraint is the delta cap—total options delta should not exceed your share count.
+
+### Performance Metrics
+
+- **CAGR, Sharpe, Sortino, Max DD:** Calculated on the **combined portfolio** (shares + options cash + options positions) unless otherwise noted
+- **Sharpe Ratio:** Annualized from daily returns: (mean daily return / std of daily returns) × √252
+- **Sortino Ratio:** Like Sharpe but uses only downside deviation (penalizes downside volatility only)
+- **Win Rate, P&L:** Refer to the options trades only
+
+### Why Metrics May Vary Slightly
+
+Results may differ slightly between tests due to:
+- Different simulation periods (some tests use 2015-2025, others 2015-2026)
+- Contract availability (some strikes/expirations have missing quote data)
+- Minor code variations between test files
+
+These variations are typically small (±0.1% CAGR, ±0.02 Sharpe).
+
+### Backtest Charts
+
+Visual charts of portfolio growth, drawdowns, and yearly returns are available separately and can be attached to this document for distribution.
 
 ---
 
@@ -221,7 +262,7 @@ Total portfolio delta:    2,000 + 1,580 = 3,580
 
 The choice of SMA period significantly impacts strategy performance. We tested four periods (50, 100, 150, 200 days) with all other parameters held constant.
 
-**Results:**
+**Table 1: SMA Period Comparison** (Combined portfolio: 3,125 shares + $100k options)
 
 | SMA | CAGR | Sharpe | Max DD | Trades | Win Rate | SMA Exits | Total P&L |
 |-----|------|--------|--------|--------|----------|-----------|-----------|
@@ -258,6 +299,27 @@ SMA150 and SMA200 performed nearly identically. We chose SMA200 because:
 3. **Best max drawdown** (-32.3% vs. -32.5%) - marginally better risk profile
 4. **Industry standard** - the 200-day moving average is widely followed, making it harder for others to front-run the signal
 
+### SMA Exit Threshold Comparison
+
+We also tested different thresholds for exiting all positions when SPY falls below SMA200. The question: should we exit immediately when price crosses below SMA (0% threshold), or allow a buffer before exiting?
+
+**Table 2: SMA Exit Threshold Comparison** (Combined portfolio)
+
+| Threshold | CAGR | Sharpe | Max DD | Trades | Win Rate | SMA Exits | Total P&L |
+|-----------|------|--------|--------|--------|----------|-----------|-----------|
+| 0% | +15.2% | 0.88 | -33.3% | 1,079 | 65.6% | 280 | $760k |
+| 1% | +15.3% | 0.89 | -32.0% | 1,087 | 69.6% | 232 | $785k |
+| **2%** | **+15.3%** | **0.88** | **-32.3%** | **1,062** | **71.3%** | **182** | **$800k** |
+| 3% | +15.4% | 0.86 | -34.4% | 1,042 | 72.8% | 147 | $820k |
+
+**Why We Chose 2%:**
+
+The 1% and 2% thresholds perform similarly, with 1% having marginally better Sharpe (0.89 vs 0.88) and max drawdown (-32.0% vs -32.3%). We chose 2% because:
+- Fewer forced exits (182 vs 232) means less trading friction
+- Higher win rate (71.3% vs 69.6%) improves behavioral experience
+- More total P&L ($800k vs $785k)
+- The 3% threshold shows degraded Sharpe (0.86) and worst max drawdown (-34.4%)—too much buffer allows positions to deteriorate before exit
+
 ### Alternative Tickers Tested
 
 | Ticker | Description | Result |
@@ -291,7 +353,8 @@ We analyzed whether entry conditions affected outcomes:
 
 We tested buying calls only on "down days" (when SPY closes lower than the prior day), hypothesizing that buying after pullbacks might improve entry prices.
 
-*Initial test (same position size):*
+**Table 3: Down-Day Entry - Same Position Size** (Combined portfolio)
+
 | Strategy | CAGR | Sharpe | Trades | Win Rate | P&L |
 |----------|------|--------|--------|----------|-----|
 | Original (daily) | 15.3% | 0.877 | 1,062 | 71.3% | $800k |
@@ -299,7 +362,7 @@ We tested buying calls only on "down days" (when SPY closes lower than the prior
 
 Better per-trade quality (higher Sharpe, win rate) but fewer trades reduced total P&L.
 
-*Scaled position test (equal capital deployment):*
+**Table 4: Down-Day Entry - Scaled Position Size** (Combined portfolio)
 
 To fairly compare, we tested buying 2x or 3x contracts on down days:
 
@@ -317,10 +380,12 @@ We tested whether continuing to buy calls when spot is in the "buffer zone" (bet
 
 *Hypothesis:* If we keep buying during mild pullbacks rather than stopping at the SMA, we might accumulate more positions before exiting, reducing the whipsaw problem.
 
-| Strategy | CAGR | Sharpe | Trades | SMA Exits | Buffer Trades |
-|----------|------|--------|--------|-----------|---------------|
-| Original (above SMA only) | 15.3% | 0.877 | 1,062 | 182 | 0 |
-| Extended (to 2% below) | 15.3% | 0.873 | 1,132 | 229 | 77 |
+**Table 5: Extended Entry Zone Test** (Combined portfolio)
+
+| Strategy | CAGR | Sharpe | Trades | SMA Exits | Buffer Trades | Total P&L |
+|----------|------|--------|--------|-----------|---------------|-----------|
+| Original (above SMA only) | 15.3% | 0.877 | 1,062 | 182 | 0 | $800k |
+| Extended (to 2% below) | 15.3% | 0.873 | 1,132 | 229 | 77 | $785k |
 
 **Finding:** REJECTED. The extended zone made things worse:
 - 47 more SMA exits (+26%), not fewer
@@ -328,6 +393,8 @@ We tested whether continuing to buy calls when spot is in the "buffer zone" (bet
 - Buffer zone mean return only +3.0% vs +14.2% for above-SMA entries
 
 The original logic is sound: when price falls below SMA, the trend is weakening. Buying in the buffer zone is catching a falling knife—those entries often proceed to the exit threshold.
+
+**Note:** This analysis reinforces our exit threshold decision. We tested different SMA exit thresholds (0%, 1%, 2%, 3%) and found the 2% buffer optimal—see Table 2 above for full results.
 
 ---
 
@@ -371,7 +438,7 @@ We tested exiting options that fell 30%, 50%, etc. **Rejected** because:
 
 We tested adding an RSI(14) filter to avoid buying calls when the market is "overbought" (RSI > 70 or > 80). The hypothesis was that avoiding entries during short-term overextension might reduce drawdowns.
 
-**Results (2015-2026 backtest):**
+**Table 6: RSI Filter Test** (Combined portfolio, 2015-2026)
 
 | Filter | CAGR | Sharpe | Max DD | Trades | Total P&L |
 |--------|------|--------|--------|--------|-----------|
@@ -388,21 +455,29 @@ We tested adding an RSI(14) filter to avoid buying calls when the market is "ove
 
 **Conclusion:** The SMA200 trend filter is sufficient. RSI adds complexity without improving risk-adjusted returns.
 
----
+**Note on RSI for Indexes vs. Individual Stocks:** Our testing suggests RSI may not be a meaningful timing indicator for broad market indexes like SPY. Indexes tend to trend persistently, so "overbought" often indicates strong momentum rather than imminent reversal. RSI may be more useful for mean-reverting individual stocks, but this hypothesis would require separate testing.
 
+---
+ 
 ## What We Incorporated
 
 ### 1. The SMA200 Trend Filter (Core)
 
 Only buy calls when SPY > SMA200. This single rule is responsible for most of the strategy's outperformance by avoiding leveraged exposure during bear markets.
 
+*Evidence: Table 1 shows SMA200 outperforms shorter periods with fewer whipsaws.*
+
 ### 2. The 2% SMA Exit Threshold
 
 Rather than exiting immediately when price crosses below SMA200, we allow a 2% buffer. This reduces "whipsaw" trades where price briefly dips below then recovers.
 
+*Evidence: Table 2 shows 2% threshold balances fewer forced exits with acceptable drawdown.*
+
 ### 3. The Delta Cap
 
-Limiting total delta to 2x share holdings prevents over-leveraging. Without this, the strategy would accumulate excessive risk during strong uptrends.
+We limit total options delta to match share holdings (e.g., 3,125 delta for 3,125 shares), creating a maximum effective leverage of ~2x.
+
+**Note:** The delta cap is a discretionary risk management feature. Investors with higher risk tolerance could remove or increase the cap, while conservative investors could lower it. Our backtests use the delta cap as shown, but the options-only component (without the share holdings) also generates positive returns. The cap prevents runaway leverage accumulation during strong uptrends.
 
 ### 4. The 50% Profit Target
 
@@ -425,16 +500,18 @@ We only use standard monthly options (third Friday expiration) rather than weekl
 - Lower transaction costs
 - Sufficient frequency for the strategy
 
+**Note:** Weekly vs. monthly expirations have not been formally backtested. The monthly-only approach is based on liquidity considerations and the strategy's 60-day holding period. A formal comparison may be conducted in future testing.
+
 ### 7. Potential Enhancement: Down-Day Entry with Scaling (Under Consideration)
 
-Testing showed that buying only on down days with 3x position scaling may improve results:
+Testing showed that buying only on down days with 3x position scaling may improve results (see Table 4):
 - CAGR: 15.7% vs 15.3% original
 - Sharpe: 0.891 vs 0.877 original
 - Fewer trades: 417 vs 1,062
 - Fewer whipsaw exits: 77 vs 182
 - Higher total P&L: $896k vs $800k
 
-This approach trades less frequently but in larger size when conditions are favorable (price pullback in an uptrend). Further study is warranted before incorporation into the core strategy.
+This approach trades less frequently but in larger size when conditions are favorable (price pullback in an uptrend). The "3x" scaling means entering 3 contracts instead of 1 on each down-day signal. In practice, position size should be scaled to your options allocation—see the Backtest Methodology section for guidance.
 
 ---
 
@@ -442,13 +519,15 @@ This approach trades less frequently but in larger size when conditions are favo
 
 ### The Sharpe Ratio Puzzle
 
-Here's something that initially seems paradoxical:
+Here's something that initially seems paradoxical.
 
-| Component | Sharpe Ratio |
-|-----------|--------------|
-| SPY shares alone | ~0.67 |
-| Options strategy alone | ~0.6 |
-| **Combined portfolio** | **~1.03** |
+**Note on Sharpe/Sortino Consistency:** All Sharpe ratios in this document are calculated the same way (annualized from daily returns). Minor variations between tables reflect different test periods or code paths. See the Backtest Methodology section for calculation details.
+
+| Component | Sharpe Ratio | Sortino Ratio |
+|-----------|--------------|---------------|
+| SPY shares alone | ~0.67 | ~0.95 |
+| Options strategy alone | ~0.6 | ~0.8 |
+| **Combined portfolio** | **~1.03** | **~1.35** |
 
 How can combining two things with Sharpe ~0.6 produce a combined Sharpe >1.0? They're both long SPY exposure—shouldn't they be perfectly correlated?
 
@@ -467,7 +546,7 @@ This asymmetric correlation is valuable—we participate in upside but partially
 
 **2. Cash Buffer Effect**
 
-The $100,000 options allocation isn't always deployed. During market stress, some portion is in cash. This reduces portfolio volatility during drawdowns more than it reduces returns (since the cash would have been invested in losing options anyway).
+The $100,000 options allocation (see Backtest Methodology for assumptions) isn't always deployed. During market stress, some portion is in cash. This reduces portfolio volatility during drawdowns more than it reduces returns (since the cash would have been invested in losing options anyway).
 
 **3. Return Distribution Shaping**
 
@@ -547,7 +626,7 @@ The strategy includes automated daily monitoring tools.
 **Automated Scheduling (Windows):**
 ```
 # Run setup_scheduled_task.ps1 as administrator to create scheduled task
-# Task runs daily_check.py at 10:00 AM on weekdays
+# Task runs daily_check.py at 10:00 AM on trading days
 # Logs saved to: Strategies/80-Delta Call Strategy/logs/
 ```
 
@@ -797,3 +876,14 @@ It is not appropriate for investors who:
 ---
 
 *Document prepared February 2026. Last updated February 7, 2026. Backtest period: March 2015 - January 2026.*
+
+---
+
+## Appendix: Table Index
+
+- **Table 1:** SMA Period Comparison (50/100/150/200 days)
+- **Table 2:** SMA Exit Threshold Comparison (0%/1%/2%/3%)
+- **Table 3:** Down-Day Entry - Same Position Size
+- **Table 4:** Down-Day Entry - Scaled Position Size
+- **Table 5:** Extended Entry Zone Test
+- **Table 6:** RSI Filter Test
