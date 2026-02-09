@@ -33,10 +33,12 @@ Before diving into the strategy details, here are the key assumptions used throu
 ### Portfolio Assumptions
 
 All backtests use a combined portfolio of:
-- **3,125 SPY shares** (~$1.9M at current prices) as the buy-and-hold foundation
-- **$100,000 options cash allocation** for the 80-delta call strategy
+- **1,000 SPY shares** (~$600,000 at current prices) as the buy-and-hold foundation
+- **$100,000 options cash allocation** for the 70-80 delta call strategy
 
-The $100,000 options allocation is discretionary and can be scaled based on risk tolerance. We chose this ratio (~5% options to ~95% shares) as a conservative starting point. Investors seeking more aggressive returns could increase the options allocation, while those seeking lower volatility could decrease it.
+The $100,000 options allocation is discretionary and can be scaled based on risk tolerance. We chose this ratio (~14% options to ~86% shares) as a balanced starting point. Investors seeking more aggressive returns could increase the options allocation, while those seeking lower volatility could decrease it.
+
+**Important Risk Note:** The options-only component can experience brutal drawdowns (50-80% in flash crashes or overnight gaps). This is why we recommend pairing the options strategy with a larger share holding as a foundation—the combined portfolio dampens the options volatility significantly.
 
 ### Position Sizing in Backtests vs. Live Trading
 
@@ -135,7 +137,7 @@ A strategy with 20% returns and 40% volatility (Sharpe ~0.5) is worse risk-adjus
 
 The portfolio consists of two components:
 
-1. **Share Holdings:** 2,000 shares of SPY (~$1.2M at current prices)
+1. **Share Holdings:** 1,000 shares of SPY (~$600,000 at current prices)
 2. **Options Cash:** $100,000 allocated for buying call options
 
 The share holdings provide steady market exposure. The options cash is deployed tactically.
@@ -150,8 +152,10 @@ We buy a new call option when ALL of these conditions are met:
 
 When entering, we:
 - Select a **monthly expiration** approximately 120 days out (4 months)
-- Choose a strike price that gives us **80 delta** (deep in-the-money)
+- Choose a strike price that gives us **70-80 delta** (deep in-the-money)
 - Buy **one contract** (controlling 100 shares)
+
+**Delta Target Band:** We target 70-80 delta rather than a single point because implied volatility estimates are imperfect. Any strike with delta in this band is acceptable—choose the one closest to the target (typically 0.75-0.80).
 
 ### The Delta Cap
 
@@ -159,7 +163,7 @@ Here's a crucial risk management concept. We limit our total "delta exposure" to
 
 **What does this mean?**
 
-If we own 2,000 shares, our share delta is 2,000 (each share moves $1 when SPY moves $1). We cap our options delta at an additional 2,000, meaning the combined portfolio acts like owning at most 4,000 shares worth of exposure.
+If we own 1,000 shares, our share delta is 1,000 (each share moves $1 when SPY moves $1). We cap our options delta at an additional 1,000, meaning the combined portfolio acts like owning at most 2,000 shares worth of exposure.
 
 This prevents the strategy from becoming overly leveraged. Without this cap, we could theoretically accumulate unlimited option positions and face catastrophic losses in a downturn.
 
@@ -230,17 +234,17 @@ The filter isn't predicting the future—it's identifying regimes where the risk
 Let's work through the math:
 
 ```
-Share holdings:     2,000 shares × delta 1.0 = 2,000 delta
-Options cap:        2,000 additional delta allowed
+Share holdings:     1,000 shares × delta 1.0 = 1,000 delta
+Options cap:        1,000 additional delta allowed
 
-If current options delta: 1,500
-Room for new position:    500 delta
+If current options delta: 750
+Room for new position:    250 delta
 
-New 80-delta call:        80 delta per contract × 100 shares = 80 delta
-Can we buy one contract?  80 < 500, yes.
+New 75-delta call:        75 delta per contract × 100 shares = 75 delta
+Can we buy one contract?  75 < 250, yes.
 
-After purchase:           1,500 + 80 = 1,580 options delta
-Total portfolio delta:    2,000 + 1,580 = 3,580
+After purchase:           750 + 75 = 825 options delta
+Total portfolio delta:    1,000 + 825 = 1,825
 ```
 
 ---
@@ -262,7 +266,7 @@ Total portfolio delta:    2,000 + 1,580 = 3,580
 
 The choice of SMA period significantly impacts strategy performance. We tested four periods (50, 100, 150, 200 days) with all other parameters held constant.
 
-**Table 1: SMA Period Comparison** (Combined portfolio: 3,125 shares + $100k options)
+**Table 1: SMA Period Comparison** (Combined portfolio: 1,000 shares + $100k options)
 
 | SMA | CAGR | Sharpe | Max DD | Trades | Win Rate | SMA Exits | Total P&L |
 |-----|------|--------|--------|--------|----------|-----------|-----------|
@@ -414,6 +418,8 @@ We tested selling covered calls (betting against upside) when below SMA200. **Re
 - Capped upside during recovery rallies
 - Transaction costs eroded small gains
 
+**Note on Covered Call Assignment Risk:** If covered calls were included, the backtest assumes shares are never assigned early. This is a simplification—early assignment risk exists for American-style calls, especially around ex-dividend dates when calls go in-the-money and extrinsic value is less than the dividend. This is an unmodeled risk that would reduce covered call returns in practice.
+
 ### 3. Dynamic Delta Targeting
 
 We tested adjusting target delta based on volatility (lower delta when VIX high). **Rejected** because:
@@ -516,7 +522,7 @@ Rather than exiting immediately when price crosses below SMA200, we allow a 2% b
 
 ### 3. The Delta Cap
 
-We limit total options delta to match share holdings (e.g., 3,125 delta for 3,125 shares), creating a maximum effective leverage of ~2x.
+We limit total options delta to match share holdings (e.g., 1,000 delta for 1,000 shares), creating a maximum effective leverage of ~2x.
 
 **Note:** The delta cap is a discretionary risk management feature. Investors with higher risk tolerance could remove or increase the cap, while conservative investors could lower it. Our backtests use the delta cap as shown, but the options-only component (without the share holdings) also generates positive returns. The cap prevents runaway leverage accumulation during strong uptrends.
 
@@ -635,12 +641,12 @@ This is why the combined portfolio's Sharpe exceeds both components—we get equ
 
 | Component | Amount | Purpose |
 |-----------|--------|---------|
-| Share holdings | ~$1,200,000 | 2,000 SPY shares at ~$600 |
+| Share holdings | ~$600,000 | 1,000 SPY shares at ~$600 |
 | Options cash | $100,000 | Call option purchases |
-| **Total** | **~$1,300,000** | |
+| **Total** | **~$700,000** | |
 
 The strategy can be scaled proportionally. A smaller investor might use:
-- 200 shares ($120,000) + $10,000 options cash = $130,000 total
+- 100 shares ($60,000) + $10,000 options cash = $70,000 total
 
 ### Broker Requirements
 
@@ -656,14 +662,25 @@ The strategy can be scaled proportionally. A smaller investor might use:
 □ If above SMA:
   □ Check current portfolio delta
   □ If delta room available and cash available:
-    □ Identify appropriate expiration (~120 DTE)
-    □ Find 80-delta strike
-    □ Check bid-ask spread (<1%)
-    □ Enter limit order at midpoint
+    □ Identify appropriate expiration (~120 DTE, monthly only)
+    □ Find strike with 70-80 delta
+    □ Verify bid/ask quotes exist (skip trade if missing)
+    □ Check bid-ask spread (<1% of mid price)
+    □ Enter limit order at midpoint (expect fill ~25% worse)
 □ Check existing positions for:
   □ 50% profit target hit → Sell
   □ 60 days held → Sell
 ```
+
+### Execution Rules
+
+**Quote Availability:** Only trade when both bid and ask quotes are available. If quotes are missing, **skip the trade**—do not use synthetic prices. Missing quotes indicate liquidity problems.
+
+**Fill Price Assumption:** Enter limit orders at the midpoint, but expect to fill approximately 25% of the spread worse than mid. For example, if bid=$34.80 and ask=$35.20 (spread $0.40, mid $35.00), expect to pay ~$35.10.
+
+**Spread Filter:** Skip trades where bid-ask spread exceeds 1% of the midpoint price. Wide spreads indicate poor liquidity.
+
+**Monthly Options Only:** Use standard monthly expirations (third Friday) only. Weekly options have liquidity problems—see Table 7.
 
 ### Live Trading Workflow
 
@@ -887,6 +904,14 @@ We tested multiple parameters and chose the best ones. Some outperformance may b
 
 ## Conclusion
 
+### What This Strategy Is
+
+At its core, this is a **trend-filtered leverage overlay with explicit risk controls**. We hold SPY shares as baseline exposure and use call options to add leveraged exposure only during uptrends (when price is above SMA200). The high-delta calls (70-80) behave like leveraged stock while limiting theta decay as a percentage of premium (since most of the value is intrinsic, not extrinsic). The hard exits (+50% profit target, 60 trading days, and regime exit when >2% below SMA200) shape the return distribution and reduce prolonged decay exposure.
+
+This is a reasonable design space for investors seeking modest return enhancement with defined risk controls.
+
+### What This Strategy Is Good For
+
 The 80-delta call strategy is a systematic approach to enhancing equity returns through disciplined options trading. Its key strengths are:
 
 1. **Simplicity:** Clear, rules-based approach anyone can follow
@@ -902,7 +927,7 @@ Its key weaknesses are:
 4. **Complexity vs. Buy-and-Hold:** More work for moderate improvement
 
 The strategy is appropriate for investors who:
-- Have sufficient capital (~$130K minimum for proper implementation)
+- Have sufficient capital (~$70K minimum for proper implementation)
 - Can monitor positions daily or near-daily
 - Accept the complexity in exchange for modest return enhancement
 - Understand and accept the risk of occasional large drawdowns
@@ -934,7 +959,7 @@ It is not appropriate for investors who:
 
 ---
 
-*Document prepared February 2026. Last updated February 7, 2026. Backtest period: March 2015 - January 2026.*
+*Document prepared February 2026. Last updated February 9, 2026. Backtest period: March 2015 - January 2026.*
 
 ---
 
