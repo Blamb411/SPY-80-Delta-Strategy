@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data caches (large files, regenerate locally)
+*.db
+backtest/thetadata_cache.db
+
+# Logs
+*.log
+logs/
+
+# Output files (regenerate by running scripts)
+*.csv
+!requirements.csv
+
+# Sensitive files
+.env
+credentials.*
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+nul
+
+# Office documents (optional - uncomment if you want to exclude)
+# *.docx
+# *.xlsx
+
+# Claude session files
+.claude/
