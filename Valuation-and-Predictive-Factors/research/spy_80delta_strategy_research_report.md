@@ -44,6 +44,13 @@ The 200-day simple moving average is empirically validated as an effective trend
 - **Crisis protection:** During 2008, the SMA filter kept us mostly in cash, generating +8.2% alpha vs. buy-and-hold
 - **Essential for options:** Unlike stocks, the SMA filter **adds** +16.5% CAGR to the options component (see Section 5.10) because options expire worthless in downtrends while stocks can wait for recovery
 
+**Academic Research Supporting Moving Average Trend Filters:**
+The 200-day SMA is one of the most studied technical indicators in academic finance:
+- **Faber (2007)** — "A Quantitative Approach to Tactical Asset Allocation," *Journal of Wealth Management*. Found 10-month SMA (~200 days) reduced S&P 500 max drawdown from -83% to -50% over 1901-2012 while maintaining similar returns.
+- **Moskowitz, Ooi & Pedersen (2012)** — "Time Series Momentum," *Journal of Financial Economics*. Peer-reviewed study showing trend-following signals work across asset classes over 25+ years.
+- **Hurst, Ooi & Pedersen (2017)** — "A Century of Evidence on Trend-Following Investing," AQR Capital Research. Validated moving average signals from 1880-2016 across multiple markets.
+- **Clare et al. (2016)** — "Trend Following, Risk Parity and Momentum in Commodity Futures," *International Review of Financial Analysis*. Confirmed SMA-based trend signals outperform buy-and-hold on risk-adjusted basis.
+
 ### Why 80-Delta Calls?
 
 | Delta Level | Characteristics |
