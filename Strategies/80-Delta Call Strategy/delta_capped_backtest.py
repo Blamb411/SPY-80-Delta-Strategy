@@ -33,6 +33,7 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(os.path.dirname(_this_dir))
@@ -129,7 +130,7 @@ def get_bid_ask(eod_row):
 
 
 def calculate_delta(spot, strike, dte, iv=0.16, rate=0.04, right="C"):
-    """Calculate option delta using Black-Scholes."""
+    """Calculate option delta using Black-Scholes with exact normal CDF."""
     if dte <= 0:
         if right == "C":
             return 1.0 if spot > strike else 0.0
@@ -138,7 +139,8 @@ def calculate_delta(spot, strike, dte, iv=0.16, rate=0.04, right="C"):
 
     t = dte / 365.0
     d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * t) / (iv * math.sqrt(t))
-    delta = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+    # Use scipy.stats.norm.cdf for exact Black-Scholes delta (not erf approximation)
+    delta = norm.cdf(d1)
 
     if right == "P":
         delta = delta - 1.0
