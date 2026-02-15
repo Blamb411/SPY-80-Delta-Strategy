@@ -38,6 +38,12 @@ The strategy combines two components:
 
 The key insight is **conditional leverage** — we add leveraged exposure only during confirmed uptrends, reducing participation in downturns while capturing upside.
 
+**SMA200 as a Validated Trend Indicator:**
+The 200-day simple moving average is empirically validated as an effective trend filter for this strategy:
+- **Fewest whipsaws:** SMA200 triggered only 182 forced exits vs. 477 for SMA50 (see Section 5.5)
+- **Crisis protection:** During 2008, the SMA filter kept us mostly in cash, generating +8.2% alpha vs. buy-and-hold
+- **Essential for options:** Unlike stocks, the SMA filter **adds** +16.5% CAGR to the options component (see Section 5.10) because options expire worthless in downtrends while stocks can wait for recovery
+
 ### Why 80-Delta Calls?
 
 | Delta Level | Characteristics |
@@ -99,6 +105,12 @@ Enter a new call position when ALL conditions are met:
 - Expiration: ~120 calendar days (monthly expirations only)
 - Strike: Target 70-80 delta (deep ITM)
 - Size: 1 contract per signal (delta-capped)
+
+**Why 120 DTE and Monthly Expirations:**
+- **Theta decay accelerates** in the final 30-60 days of an option's life
+- By entering at ~120 DTE and exiting by 60 days held (leaving ~60 DTE remaining), we avoid the steepest theta decay
+- **Monthly expirations only** — weekly options have 2.3x more missing quotes and worse liquidity (see Section 6.2)
+- The 60-day max hold rule ensures we exit before theta acceleration becomes destructive
 
 ### 3.3 Exit Rules
 
@@ -172,7 +184,9 @@ This allows stress-testing through the 2008-2009 financial crisis.
 
 ## 5. Results
 
-### 5.1 Primary Backtest (2015-2025)
+**Note on Portfolio Types:** Unless otherwise specified, results in Sections 5.1-5.5 refer to the **combined portfolio** (86% SPY shares + 14% options allocation). Sections 5.6-5.9 show **options-only** results for delta level comparisons. Section 5.10 (SMA Ablation Study) explicitly tests an **options-only** portfolio to isolate the filter's effect. The combined portfolio has significantly lower drawdowns than options-only due to the stabilizing effect of share holdings.
+
+### 5.1 Primary Backtest (2015-2025) — Combined Portfolio
 
 | Metric | Combined Portfolio | SPY Buy-and-Hold |
 |--------|-------------------|------------------|
@@ -266,8 +280,8 @@ We tested the strategy across all delta levels from 50 to 95 to find the optimal
 
 **Key Findings:**
 - **70-Delta is optimal for risk-adjusted returns** — highest Sharpe (0.67), highest Sortino (0.80), and lowest max drawdown (-43.2%)
-- **80-Delta maximizes absolute returns** in the "sweet spot" — +17.7% CAGR with acceptable risk
-- **90-95 Delta over-leverages** — higher returns but significantly worse drawdowns (-57% to -63%)
+- **80-Delta offers the best risk/return tradeoff** — significantly higher returns than 70-Delta (+17.7% vs +16.1% CAGR) while avoiding the extreme drawdowns of 90-95 Delta
+- **90-95 Delta has highest absolute returns but over-leverages** — 90-Delta reaches $3.95M but with -57.5% max drawdown; diminishing risk-adjusted returns
 - **50-60 Delta under-leverages** — barely keeps pace with SPY, doesn't justify complexity
 
 ![Delta Comparison Chart](../../Strategies/80-Delta%20Call%20Strategy/delta_comparison_chart.png)
@@ -318,6 +332,8 @@ But here's the key insight:
 
 **The 80-Delta strategy achieves equivalent returns with ~6% less drawdown.**
 
+**Note on Sharpe/Sortino:** The leveraged SPY shows slightly higher Sharpe (0.90 vs 0.82) and Sortino (1.11 vs 0.99) despite worse max drawdown. This is because Sharpe and Sortino measure **daily return volatility**, not tail risk. The daily-rebalanced leveraged SPY has smoother daily returns, while the 80-Delta strategy has lumpier returns from discrete option trades. **Max drawdown captures tail risk that Sharpe/Sortino miss** — a critical consideration for real-world investing.
+
 ![Leverage Analysis Chart](../../Strategies/80-Delta%20Call%20Strategy/leverage_analysis.png)
 
 ### 5.9 Risk/Return Summary
@@ -350,7 +366,9 @@ We conducted a comprehensive study to isolate the effect of the SMA200 filter on
 
 **For stocks/ETFs, the SMA filter HURTS returns** by 6-13% CAGR while reducing drawdowns by 7-12%.
 
-#### SMA Filter Effect on 80-Delta Options Strategy
+#### SMA Filter Effect on 80-Delta Options Strategy (Options-Only Portfolio)
+
+**Important:** This analysis tests an **options-only portfolio** (no SPY share holdings) to isolate the SMA filter's effect. The extreme drawdowns (-95% to -99.7%) reflect options-only risk, not the combined portfolio used elsewhere in this report.
 
 | Strategy | End Value | CAGR | Sharpe | Max DD |
 |----------|-----------|------|--------|--------|
@@ -358,7 +376,7 @@ We conducted a comprehensive study to isolate the effect of the SMA200 filter on
 | 80-Delta **WITHOUT** SMA | $1,125,454 | +15.7% | 0.74 | -99.7% |
 | **SMA Effect** | | **+16.5%** | +0.05 | +4.6% |
 
-**For options, the SMA filter HELPS returns** by +16.5% CAGR while also reducing drawdowns.
+**For the options-only portfolio, the SMA filter HELPS returns** by +16.5% CAGR while also reducing drawdowns. The combined portfolio (86% shares + 14% options) has much lower drawdowns (~32-49%) because the share holdings provide stability.
 
 #### Why the Opposite Effect?
 
@@ -480,7 +498,7 @@ The strategy works because it exploits:
 2. **Conditional Correlation:** Options component has lower correlation to SPY during drawdowns (cash during downtrends)
 3. **Return Distribution Shaping:** Profit targets truncate left tail, SMA exit prevents catastrophic losses
 4. **Leverage Timing:** Leverage only during favorable conditions
-5. **SMA Filter + Options Synergy:** Unlike stocks (where SMA filter hurts returns), options **require** the filter because they expire worthless if held through downtrends. The SMA filter adds +16.5% CAGR to the options strategy while it costs -6% to -13% for stock/ETF strategies.
+5. **SMA Filter + Options Synergy:** Unlike stocks (where SMA filter hurts returns), options **require** the filter because they expire worthless if held through downtrends. The SMA filter adds +16.5% CAGR to the **options-only component** while it costs -6% to -13% for stock/ETF strategies. This is why the combined portfolio (shares + options with SMA filter) outperforms both pure buy-and-hold and leveraged ETFs.
 
 ### 8.3 Strategy Appropriateness
 
