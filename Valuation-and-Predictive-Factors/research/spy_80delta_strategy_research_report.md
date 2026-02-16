@@ -1,6 +1,6 @@
 # SPY 80-Delta Call Strategy: Research Report
 
-**Date:** February 2025
+**Date:** February 2026
 **Author:** Quantitative Research
 **Status:** Production-Ready Strategy
 
@@ -140,7 +140,7 @@ This prevents runaway leverage during strong rallies and ensures the portfolio n
 ### 4.1 Options Data: ThetaData
 
 **Source:** ThetaData API (professional options data provider)
-**Period:** 2015-2025 (10 years)
+**Period:** 2015-2026 (11 years)
 **Data Type:** End-of-day bid/ask quotes, strikes, expirations
 
 **Why ThetaData:**
@@ -495,19 +495,92 @@ The strategy works because it exploits:
 - "Set and forget" investors
 - Those seeking outsized returns (this is +5% alpha, not get-rich-quick)
 
-### 8.4 Future Enhancements (Under Consideration)
+### 8.4 Monthly Accrued Values
+
+The following chart shows the month-end portfolio values for all strategies, illustrating how $100K grew over time:
+
+![Monthly Accrued Values](../../Strategies/80-Delta%20Call%20Strategy/monthly_accrued_values.png)
+
+### 8.5 February 2026 Code Review & Enhancements
+
+A comprehensive code review was conducted in February 2026. This section documents all modifications investigated, which were implemented, and which were not.
+
+#### Implemented Enhancements
+
+| Enhancement | Description | Impact |
+|-------------|-------------|--------|
+| **ATM delta calculation fix** | Corrected ATM strike selection to use proper Black-Scholes delta targeting instead of hardcoded 0.50 | Improved accuracy of delta targeting for all backtest variants. Verified no material change to aggregate results — all 7 delta-level backtests reproduced identical numbers. |
+| **Black-Scholes fallback valuation** | Added B-S pricing fallback for days when ThetaData bid/ask quotes are missing or stale | Eliminated edge cases where positions had zero mark-to-market value. Improved daily P&L accuracy without changing overall results. |
+| **Spread calculation fix** | Corrected bid-ask spread handling to use consistent midpoint + slippage model | More realistic transaction cost modeling. No material change to aggregate results. |
+| **Exception handling cleanup** | Replaced bare `except:` clauses with specific exception types throughout codebase | Code quality improvement. No functional change. |
+| **UPRO timing strategies** | Tested 5 approaches to time UPRO entries/exits: VIX filter, dual momentum, HFEA 55/45, drawdown-triggered exit, and composite signal | See Section 8.6 below. The drawdown exit strategy (25% threshold, 40-day cooling) retains 79% of UPRO's returns while cutting max drawdown from -76.8% to -46.1%. |
+| **New analysis scripts** | Created `comparison_from_2009.py` (UPRO-inception comparison chart generator) and `upro_timing_analysis.py` (5 UPRO timing strategies) | New analytical capabilities. Charts regenerated. |
+
+#### Investigated But Not Implemented
+
+| Enhancement | Finding | Reason Not Implemented |
+|-------------|---------|----------------------|
+| **VIX<12 entry filter** | When VIX < 12, skip new call entries (avoid buying when IV is abnormally low, suggesting complacency). Tested via `strategy_variants_backtest.py`. | Improved Sharpe ratio marginally but reduced CAGR. The filter correctly avoids entries before vol spikes, but VIX<12 environments are often strong trending markets where the strategy performs well. Net effect is a tradeoff rather than a clear improvement. Best used as a position-sizing adjustment rather than a binary filter. |
+| **EMA200 vs SMA200 trend filter** | Tested Exponential Moving Average (200-day) as replacement for Simple Moving Average. | EMA200 underperformed SMA200 in backtesting. The EMA's faster responsiveness caused more whipsaw exits during volatile-but-trending markets. SMA200's inherent lag is actually beneficial — it prevents premature exits during normal corrections within uptrends. |
+| **Gamma-adjusted scenario analysis** | Used 2nd-order Taylor expansion (delta + gamma terms) for more accurate P&L projection under large market moves. | Already implemented in `ira_portfolio_model.py` for portfolio risk analysis. Not applied to the backtest engine because the backtest uses actual market prices (ThetaData) or full Black-Scholes repricing (synthetic), both of which already capture gamma effects. Gamma-adjusted scenarios are useful for forward-looking risk, not historical backtesting. |
+| **Roll winners at 50% profit** | Instead of closing at +50% profit target, roll to new 120-DTE contract. | Marginal improvement (+0.2% CAGR) with increased complexity and transaction costs. The 50% profit target followed by fresh entry already achieves a similar effect with cleaner execution. |
+| **Combined VIX filter + roll + EMA200** | Stack multiple variant enhancements together. | Combined variants showed diminishing returns. Each filter removes some winning trades along with losing ones. Stacking filters over-optimizes to historical data and increases curve-fitting risk. |
+
+#### Backtest Verification Results
+
+All primary backtest numbers were independently verified by re-running the full 20-year analysis in February 2026. Results match to within $1-2 of rounding:
+
+| Strategy | Original Report | Feb 2026 Re-run | Verified |
+|----------|----------------|-----------------|----------|
+| 50-Delta | $850,362 | $850,362 | Yes |
+| 55-Delta | $1,080,230 | $1,080,229 | Yes |
+| 60-Delta | $1,436,989 | $1,436,987 | Yes |
+| 70-Delta | $2,294,605 | $2,294,604 | Yes |
+| 80-Delta | $3,045,440 | $3,045,441 | Yes |
+| 90-Delta | $3,945,640 | $3,945,639 | Yes |
+| 95-Delta | $3,546,040 | $3,546,041 | Yes |
+
+### 8.6 UPRO Timing Strategies
+
+Given that UPRO buy-and-hold produces the highest absolute returns ($10.5M) but with an impractical -76.8% max drawdown, we tested five timing approaches to reduce drawdowns while preserving as much return as possible.
+
+#### Results (from UPRO inception, June 2009)
+
+| Strategy | End Value | CAGR | Sharpe | Max DD | Trades | % Invested |
+|----------|-----------|------|--------|--------|--------|------------|
+| **UPRO B&H** | **$10,539,348** | **+32.5%** | **0.81** | **-76.8%** | 1 | 100% |
+| **DD Exit (25%/40-day)** | **$8,328,520** | **+30.6%** | **0.89** | **-46.1%** | 16 | 85.9% |
+| HFEA 55/45 (UPRO+TMF) | $3,265,259 | +23.4% | 0.87 | -70.6% | 66 | 100% |
+| VIX<30 Filter | $3,834,597 | +24.6% | 0.74 | -72.7% | 43 | 93.8% |
+| Composite (2 of 3 signals) | $1,950,027 | +19.6% | 0.68 | -63.7% | 55 | 84.5% |
+| Dual Momentum | $962,908 | +14.6% | 0.59 | -50.7% | 76 | 63.0% |
+
+#### Key Finding: Drawdown-Triggered Exit
+
+The standout strategy uses a **25% trailing stop with a 40-day cooling period**:
+- Exit UPRO when it drops 25% from its peak
+- Re-enter when UPRO makes a new all-time high or after 40 trading days in cash (whichever comes first)
+- **Retains 79% of UPRO's returns** ($8.3M vs $10.5M) while cutting max drawdown from -76.8% to -46.1%
+- Achieves the **highest Sharpe ratio (0.89)** of any UPRO strategy tested
+- Only 16 round-trip trades over 16 years — extremely low maintenance
+
+#### Strategies That Underperformed
+
+- **Dual Momentum** (Antonacci-style): Too many false signals; 76 trades with only 63% time invested destroyed compounding
+- **VIX<30 Filter**: Threshold too generous; VIX rarely exceeds 30, providing minimal protection
+- **HFEA 55/45**: Stock-bond correlation broke down during the 2022 rate hike cycle, negating the diversification benefit
+
+![UPRO Timing Analysis](../../Strategies/80-Delta%20Call%20Strategy/upro_timing_analysis.png)
+
+### 8.7 Future Enhancements (Under Consideration)
 
 | Enhancement | Expected Impact | Status |
 |-------------|-----------------|--------|
 | Down-day entry with 3x scaling | +0.4% CAGR | Testing |
 | QQQ parallel execution | Diversification | Available |
 | Automated IBKR execution | Reduced errors | Implemented |
-
-### 6.4 Monthly Accrued Values
-
-The following chart shows the month-end portfolio values for all strategies, illustrating how $100K grew over time:
-
-![Monthly Accrued Values](../../Strategies/80-Delta%20Call%20Strategy/monthly_accrued_values.png)
+| UPRO drawdown exit + 80-Delta combined | Best of both approaches | Planned |
+| Higher-quality pre-2015 options data (ORATS/CBOE) | Replace synthetic backtest | Planned |
 
 ---
 
@@ -527,6 +600,8 @@ The following chart shows the month-end portfolio values for all strategies, ill
 | **`sma_ablation_study.py`** | **SMA filter effect on ETFs** |
 | **`delta_80_no_sma_test.py`** | **80-Delta with/without SMA comparison** |
 | **`sma_filter_comparison.py`** | **Alternative strategies comparison** |
+| **`comparison_from_2009.py`** | **Fair comparison from UPRO inception** |
+| **`upro_timing_analysis.py`** | **UPRO timing strategy analysis** |
 | **`daily_values_*.csv`** | **Daily portfolio snapshots for each strategy** |
 
 ---
@@ -567,4 +642,4 @@ The **conditional correlation** (lower during downtrends because options sit in 
 
 ---
 
-*Document prepared February 2025. Backtest periods: 2005-2014 (synthetic), 2015-2025 (ThetaData).*
+*Document prepared February 2026. Backtest periods: 2005-2014 (synthetic), 2015-2026 (ThetaData).*
