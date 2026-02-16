@@ -233,7 +233,7 @@ def log_alert(alert: Alert):
         try:
             with open(ALERT_LOG_FILE, 'r') as f:
                 alerts = json.load(f)
-        except:
+        except (json.JSONDecodeError, OSError):
             alerts = []
 
     # Add new alert
@@ -253,7 +253,7 @@ def get_alert_history() -> Dict[str, str]:
         try:
             with open(ALERT_HISTORY_FILE, 'r') as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
@@ -294,7 +294,7 @@ def connect_ibkr() -> Optional[IB]:
     try:
         ib.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID, timeout=10)
         return ib
-    except:
+    except Exception:
         return None
 
 
@@ -314,7 +314,7 @@ def get_option_price(ib: IB, pos: Position) -> Optional[float]:
 
     try:
         ib.qualifyContracts(opt)
-    except:
+    except Exception:
         return None
 
     ticker = ib.reqMktData(opt, '', False, False)

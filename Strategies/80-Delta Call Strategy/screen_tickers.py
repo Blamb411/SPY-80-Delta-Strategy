@@ -215,7 +215,8 @@ def check_options_liquidity(client, ticker, check_date, current_price=None):
     result["atm_oi"] = oi
 
     if bid > 0 and ask > 0:
-        result["spread_pct"] = (ask - bid) / bid
+        mid = (bid + ask) / 2.0
+        result["spread_pct"] = (ask - bid) / mid
 
     # Calculate liquidity score (0-100)
     oi_score = min(100, (oi / MIN_OI) * 50) if oi > 0 else 0

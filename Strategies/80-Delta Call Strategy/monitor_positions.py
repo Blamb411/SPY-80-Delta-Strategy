@@ -233,6 +233,8 @@ def calculate_delta(spot: float, strike: float, dte: int, iv: float = 0.16,
                     rate: float = 0.045) -> float:
     """Calculate option delta using Black-Scholes."""
     if dte <= 0:
+        if spot == strike:
+            return 0.5  # ATM at expiry: delta ~0.5
         return 1.0 if spot > strike else 0.0
 
     t = dte / 365.0
@@ -411,7 +413,7 @@ def main():
             pass
 
         if not spot:
-            spot = 680.0  # Conservative fallback
+            spot = 600.0  # Conservative fallback - update periodically
             print(f"Using fallback SPY price: ${spot:.2f}")
         print()
 

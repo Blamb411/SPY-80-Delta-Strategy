@@ -212,6 +212,8 @@ def load_yahoo_data():
 def calculate_delta(spot, strike, dte, iv=0.16, rate=0.04, right="C"):
     """Calculate option delta using Black-Scholes."""
     if dte <= 0:
+        if spot == strike:
+            return 0.5 if right == "C" else -0.5
         if right == "C":
             return 1.0 if spot > strike else 0.0
         else:

@@ -83,6 +83,8 @@ def calculate_delta(spot: float, strike: float, dte: int, iv: float = 0.16,
                     rate: float = 0.045, right: str = "C") -> float:
     """Calculate option delta using Black-Scholes."""
     if dte <= 0:
+        if spot == strike:
+            return 0.5 if right == "C" else -0.5
         if right == "C":
             return 1.0 if spot > strike else 0.0
         else:
@@ -100,6 +102,19 @@ def calculate_delta(spot: float, strike: float, dte: int, iv: float = 0.16,
     return delta
 
 
+def calculate_gamma(spot: float, strike: float, dte: int, iv: float = 0.16,
+                    rate: float = 0.045) -> float:
+    """Calculate option gamma using Black-Scholes."""
+    if dte <= 0 or spot <= 0 or strike <= 0 or iv <= 0:
+        return 0.0
+
+    t = dte / 365.0
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * t) / (iv * sqrt_t)
+    npd1 = math.exp(-0.5 * d1 * d1) / math.sqrt(2.0 * math.pi)
+    return npd1 / (spot * iv * sqrt_t)
+
+
 def connect_ibkr() -> Optional[IB]:
     if not HAS_IBKR:
         return None
@@ -107,7 +122,7 @@ def connect_ibkr() -> Optional[IB]:
     try:
         ib.connect("127.0.0.1", 7497, clientId=95, timeout=10)
         return ib
-    except:
+    except Exception:
         return None
 
 
@@ -127,7 +142,7 @@ def get_option_price(ib: IB, symbol: str, expiration: str, strike: float,
     opt = Option(symbol, exp_str, strike, right, "SMART")
     try:
         ib.qualifyContracts(opt)
-    except:
+    except Exception:
         return None
 
     ticker = ib.reqMktData(opt, '', False, False)
@@ -236,8 +251,16 @@ def analyze_current_portfolio(spot: float, option_prices: dict):
     print()
 
     # Risk metrics
-    print("RISK ANALYSIS")
+    print("RISK ANALYSIS (Gamma-Adjusted)")
     print("-" * 40)
+
+    # Calculate portfolio gamma for scenario analysis
+    total_gamma = 0.0
+    for opt in IRA_OPTIONS:
+        exp_date = datetime.strptime(opt.expiration, "%Y-%m-%d").date()
+        dte = (exp_date - date.today()).days
+        gamma_per = calculate_gamma(spot, opt.strike, dte, right=opt.right)
+        total_gamma += gamma_per * opt.quantity * 100
 
     # What happens if SPY moves
     scenarios = [
@@ -248,24 +271,34 @@ def analyze_current_portfolio(spot: float, option_prices: dict):
         ("SPY -20%", spot * 0.80),
     ]
 
-    print(f"  {'Scenario':<15} {'Portfolio Value':>18} {'Change':>12}")
-    print(f"  {'-' * 45}")
+    print(f"  {'Scenario':<15} {'Portfolio Value':>18} {'Change':>12} {'Linear Est':>12}")
+    print(f"  {'-' * 57}")
 
     for scenario_name, new_spot in scenarios:
         # Shares value
         new_shares_value = shares * new_spot
 
-        # Options value (simplified - assume delta stays constant for small moves)
-        # More accurate: recalculate option price
+        # Options value using delta + gamma (2nd-order Taylor expansion)
         spot_change = new_spot - spot
-        new_options_value = total_options_value + (total_options_delta * spot_change)
-        new_options_value = max(0, new_options_value)  # Can't go below 0
+        # Gamma-adjusted: dV = delta * dS + 0.5 * gamma * dS^2
+        new_options_value = (
+            total_options_value
+            + total_options_delta * spot_change
+            + 0.5 * total_gamma * spot_change * spot_change
+        )
+        new_options_value = max(0, new_options_value)
+
+        # Linear estimate for comparison
+        linear_options = total_options_value + (total_options_delta * spot_change)
+        linear_options = max(0, linear_options)
+        linear_total = new_shares_value + linear_options
+        linear_pct = (linear_total - total_value) / total_value * 100
 
         new_total = new_shares_value + new_options_value
         change = new_total - total_value
         change_pct = change / total_value * 100
 
-        print(f"  {scenario_name:<15} ${new_total:>17,.0f} {change_pct:>+11.1f}%")
+        print(f"  {scenario_name:<15} ${new_total:>17,.0f} {change_pct:>+11.1f}% {linear_pct:>+11.1f}%")
 
     print()
 
@@ -341,8 +374,8 @@ def main():
         print()
 
     if not spot:
-        # Fallback
-        spot = 688.50  # Approximate current price
+        # Fallback - update periodically in config.py
+        spot = 600.0
         print(f"Using estimated SPY price: ${spot:.2f}")
         print()
 

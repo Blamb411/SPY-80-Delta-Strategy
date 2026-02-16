@@ -132,6 +132,8 @@ def get_bid_ask(eod_row):
 def calculate_delta(spot, strike, dte, iv=0.16, rate=0.04, right="C"):
     """Calculate option delta using Black-Scholes with exact normal CDF."""
     if dte <= 0:
+        if spot == strike:
+            return 0.5 if right == "C" else -0.5
         if right == "C":
             return 1.0 if spot > strike else 0.0
         else:
@@ -308,7 +310,11 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
                 bid, _ = get_bid_ask(eod)
                 if bid is None or bid <= 0:
                     intrinsic = max(0, spot - pos["strike"])
-                    bid = intrinsic * 0.998 if intrinsic > 0 else 0.001
+                    # Use B-S estimate instead of $0.001 to preserve time value
+                    dte = (datetime.strptime(pos["expiration"], "%Y-%m-%d").date() -
+                           datetime.strptime(today, "%Y-%m-%d").date()).days
+                    bs_price = black_scholes_price(spot, pos["strike"], dte / 365.0, RATE, iv_est, "C")
+                    bid = (bs_price * 0.98) if bs_price and bs_price > 0 else max(intrinsic * 0.998, 0.01)
                 proceeds = bid * 100 * pos["quantity"]
                 pending_cash += proceeds
                 pnl_pct = bid / pos["entry_price"] - 1
@@ -345,7 +351,10 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
             bid, _ = get_bid_ask(eod)
             if bid is None or bid <= 0:
                 intrinsic = max(0, spot - pos["strike"])
-                bid = intrinsic * 0.998 if intrinsic > 0 else 0.001
+                dte = (datetime.strptime(pos["expiration"], "%Y-%m-%d").date() -
+                       datetime.strptime(today, "%Y-%m-%d").date()).days
+                bs_price = black_scholes_price(spot, pos["strike"], dte / 365.0, RATE, iv_est, "C")
+                bid = (bs_price * 0.98) if bs_price and bs_price > 0 else max(intrinsic * 0.998, 0.01)
 
             pnl_pct = bid / pos["entry_price"] - 1
             exit_reason = None
