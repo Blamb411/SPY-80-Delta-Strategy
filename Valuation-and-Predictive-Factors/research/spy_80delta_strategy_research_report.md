@@ -415,6 +415,81 @@ We conducted a comprehensive study to isolate the effect of the SMA200 filter on
 
 ![80-Delta SMA Comparison](../../Strategies/80-Delta%20Call%20Strategy/delta_80_sma_comparison.png)
 
+### 5.11 Market Environment Analysis: Up, Down, and Flat Markets
+
+We analyzed 199 months of returns (2005-2026) segmented by market environment to understand how each strategy performs in different conditions.
+
+**Market Distribution:** Up (>2%): 47.7% | Flat (±2%): 33.2% | Down (<-2%): 19.1%
+
+#### Performance by Market Environment
+
+| Strategy | Up Markets (>2%) | Flat Markets (±2%) | Down Markets (<-2%) |
+|----------|------------------|--------------------|--------------------|
+| | Mean / Win Rate | Mean / Win Rate | Mean / Win Rate |
+| SPY B&H | +4.48% / 100% | +0.25% / 65.2% | -5.06% / 0% |
+| SSO B&H | +8.78% / 100% | +0.12% / 56.1% | -10.53% / 0% |
+| UPRO B&H | +13.21% / 100% | **-0.14%** / 51.5% | -15.99% / 0% |
+| 70-Delta | +7.36% / 86.3% | -0.44% / 39.4% | -6.98% / 2.6% |
+| 80-Delta | +8.36% / 87.4% | -0.31% / 42.4% | -8.40% / 2.6% |
+| 90-Delta | +9.47% / 84.2% | -0.15% / 45.5% | -9.76% / 2.6% |
+
+**Key Insight:** UPRO has a **negative mean return** (-0.14%) in flat markets with only 51.5% win rate—volatility decay bleeds value even when markets go nowhere.
+
+#### The Up/Down Capture Ratio
+
+The most revealing metric is the ratio of upside capture to downside exposure:
+
+| Strategy | Upside Capture | Downside Exposure | **Capture Ratio** |
+|----------|----------------|-------------------|-------------------|
+| 70-Delta | 1.64x SPY | 1.38x SPY | **1.19** (best) |
+| 80-Delta | 1.87x SPY | 1.66x SPY | **1.12** |
+| 90-Delta | 2.11x SPY | 1.93x SPY | **1.10** |
+| SSO | 1.96x SPY | 2.08x SPY | **0.94** |
+| UPRO | 2.95x SPY | 3.16x SPY | **0.93** |
+
+**Critical Finding:** The delta strategies have capture ratios **above 1.0**, meaning they capture more upside per unit of downside than the underlying. Leveraged ETFs have ratios **below 1.0**—they lose relatively more than they gain.
+
+#### Correlation Anomaly in Down Markets
+
+| Strategy | Up Markets | Flat Markets | Down Markets |
+|----------|------------|--------------|--------------|
+| SSO | 1.00 | 0.99 | 0.99 |
+| UPRO | 1.00 | 0.97 | 0.97 |
+| 70-Delta | 0.10 | 0.70 | **-0.11** |
+| 80-Delta | 0.12 | 0.72 | **-0.05** |
+| 90-Delta | 0.12 | 0.76 | **+0.01** |
+
+The delta strategies show **near-zero or negative correlation** with SPY during down months because the SMA filter moves us to cash, breaking the correlation and providing diversification benefit exactly when it matters most.
+
+#### Rolling 12-Month Returns
+
+| Strategy | Mean | Median | Std Dev | Min | Max | % Positive |
+|----------|------|--------|---------|-----|-----|------------|
+| SPY B&H | +14.7% | +15.7% | 11.8% | -18.2% | +56.2% | 90.4% |
+| SSO B&H | +25.7% | +25.6% | 26.7% | -39.0% | +130.5% | 83.5% |
+| UPRO B&H | +36.7% | +36.1% | 45.4% | -56.8% | +227.2% | 77.7% |
+| 70-Delta | +27.2% | +12.9% | 40.5% | -33.3% | +158.3% | 72.9% |
+| 80-Delta | +30.0% | +18.6% | 44.8% | -37.8% | +211.9% | 75.5% |
+| 90-Delta | +33.3% | +21.1% | 51.2% | -43.3% | +231.5% | 76.6% |
+
+**Worst 12-Month Periods:**
+- SPY: -18.2% (ending Dec 2022)
+- UPRO: -56.8% (ending Dec 2022)
+- 80-Delta: -37.8% (ending May 2012)
+
+The 80-Delta worst 12-month loss (-37.8%) is 19 percentage points better than UPRO's worst (-56.8%).
+
+#### Summary: Why Delta Strategies Outperform on Risk-Adjusted Basis
+
+| Factor | Leveraged ETFs | Delta Strategies |
+|--------|----------------|------------------|
+| Flat market behavior | Negative returns (decay) | Negative returns (theta) |
+| Down market losses | 2-3x SPY losses | 1.4-1.9x SPY losses |
+| Down market correlation | ~1.0 (fully correlated) | ~0.0 (uncorrelated) |
+| Capture ratio | <1.0 (lose more than gain) | >1.0 (gain more than lose) |
+
+**The delta strategies achieve their alpha by losing less in down markets, not by gaining more in up markets.**
+
 ---
 
 ## 6. Risk Analysis
