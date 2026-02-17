@@ -56,11 +56,12 @@ logging.basicConfig(
 log = logging.getLogger("condor_theta")
 
 # ---------------------------------------------------------------------------
-# Strategy constants (match condor_real_data.py exactly)
+# Strategy constants
 # ---------------------------------------------------------------------------
-IV_RANK_LOW = 0.30
+IV_RANK_LOW = 0.15             # IV rank floor (was 0.30)
 IV_RANK_MED = 0.50
 IV_RANK_HIGH = 0.70
+VIX_ABS_FLOOR = 18.0           # minimum absolute VIX level to enter
 
 DELTA_BY_IV_TIER = {
     "low": None,
@@ -69,17 +70,25 @@ DELTA_BY_IV_TIER = {
     "very_high": 0.30,
 }
 
-WING_WIDTH_PCT = 0.03          # 3% of spot
+DEFAULT_FLAT_DELTA = 0.20      # flat delta override (0 = use tier-based)
+
+WING_WIDTH_PCT = 0.06          # 6% of spot (was 3%)
 MIN_WING_WIDTH = 5.0           # minimum wing width in dollars
 MAX_CREDIT_RATIO = 0.60        # reject if credit > 60% of wing width
 ENTRY_INTERVAL = 5             # every 5 trading days
-DTE_TARGET = 30
-DTE_MIN = 25
-DTE_MAX = 45
+DTE_TARGET = 45                # 45 DTE entry (was 30)
+DTE_MIN = 35
+DTE_MAX = 55
+DTE_EXIT = 21                  # time-based exit at 21 DTE
 RISK_FREE_RATE = 0.05
-TAKE_PROFIT_PCT = 0.50         # close when position value <= 50% of credit
-STOP_LOSS_PCT = 0.75           # close when loss >= 75% of max loss
+TAKE_PROFIT_PCT = 0.25         # close when cost-to-close <= 25% of credit (i.e. 75% of credit captured)
+STOP_LOSS_MULT = 3.0           # stop at 3x credit received (was 75% of max loss)
 SYNTHETIC_SPREAD_PCT = 0.05    # 5% synthetic spread for Jan-May 2012
+SMA_PERIOD = 200               # 200-day SMA trend filter
+
+# Transaction costs
+COMMISSION_PER_CONTRACT = 2.60  # $0.65/leg x 4 legs (one side; round-trip = x2 = $5.20)
+SLIPPAGE_PER_SHARE = 0.02      # $0.02/share slippage per leg
 
 # ThetaData coverage starts June 2012
 THETADATA_START = "2012-06-01"
@@ -107,11 +116,20 @@ def compute_vix_iv_rank(vix_today: float, vix_history: Dict[str, float],
     return calculate_iv_rank(vix_today, trail, lookback)
 
 
-def select_delta_tier(iv_rank: float) -> Tuple[Optional[float], str]:
+def select_delta_tier(iv_rank: float, flat_delta: float = 0.0,
+                      iv_rank_low: float = None) -> Tuple[Optional[float], str]:
     """Select short delta and tier name from IV rank."""
-    if iv_rank < IV_RANK_LOW:
+    floor = iv_rank_low if iv_rank_low is not None else IV_RANK_LOW
+    if iv_rank < floor:
         return None, "low"
-    elif iv_rank < IV_RANK_MED:
+    if flat_delta > 0:
+        if iv_rank < IV_RANK_MED:
+            return flat_delta, "medium"
+        elif iv_rank < IV_RANK_HIGH:
+            return flat_delta, "high"
+        else:
+            return flat_delta, "very_high"
+    if iv_rank < IV_RANK_MED:
         return DELTA_BY_IV_TIER["medium"], "medium"
     elif iv_rank < IV_RANK_HIGH:
         return DELTA_BY_IV_TIER["high"], "high"
@@ -125,7 +143,10 @@ def select_delta_tier(iv_rank: float) -> Tuple[Optional[float], str]:
 
 def build_condor_strikes(spot: float, vix: float,
                          put_delta: float,
-                         call_delta: float = None) -> Optional[Dict[str, float]]:
+                         call_delta: float = None,
+                         wing_width_pct: float = None,
+                         put_wing_mult: float = 1.0,
+                         call_wing_mult: float = 1.0) -> Optional[Dict[str, float]]:
     """
     Build 4 target strikes using B-S delta targeting.
 
@@ -134,12 +155,17 @@ def build_condor_strikes(spot: float, vix: float,
         vix: VIX level (percentage, e.g. 20 for 20%)
         put_delta: Delta for put-side short strike (e.g. 0.20)
         call_delta: Delta for call-side short strike. If None, uses put_delta.
+        wing_width_pct: Override wing width (fraction of spot). Defaults to WING_WIDTH_PCT.
+        put_wing_mult: Multiplier for put wing width (>1.0 for broken-wing condor)
+        call_wing_mult: Multiplier for call wing width
 
     Returns dict with keys: long_put, short_put, short_call, long_call
     or None if delta solve fails.
     """
     if call_delta is None:
         call_delta = put_delta
+    if wing_width_pct is None:
+        wing_width_pct = WING_WIDTH_PCT
 
     vix_decimal = vix / 100.0
     dte_years = DTE_TARGET / 365.0
@@ -160,10 +186,13 @@ def build_condor_strikes(spot: float, vix: float,
     if sp_strike >= spot or sc_strike <= spot:
         return None
 
-    # Wing width with minimum floor
-    wing = max(round(spot * WING_WIDTH_PCT), MIN_WING_WIDTH)
-    lp_strike = sp_strike - wing
-    lc_strike = sc_strike + wing
+    # Wing width with minimum floor, supporting asymmetric (broken-wing) wings
+    base_wing = max(round(spot * wing_width_pct), MIN_WING_WIDTH)
+    put_wing = max(round(base_wing * put_wing_mult), MIN_WING_WIDTH)
+    call_wing = max(round(base_wing * call_wing_mult), MIN_WING_WIDTH)
+
+    lp_strike = sp_strike - put_wing
+    lc_strike = sc_strike + call_wing
 
     if lp_strike >= sp_strike or lc_strike <= sc_strike:
         return None
@@ -427,27 +456,47 @@ def simulate_condor_trade(
     bar_idx_map: Dict[str, int],
     use_synthetic: bool = False,
     call_delta_offset: float = 0.0,
+    flat_delta: float = DEFAULT_FLAT_DELTA,
+    iv_rank_low: float = None,
+    sma_value: Optional[float] = None,
+    sma_period: int = SMA_PERIOD,
+    wing_width_pct: float = None,
+    put_wing_mult: float = 1.0,
+    call_wing_mult: float = 1.0,
+    stop_loss_mult: float = STOP_LOSS_MULT,
+    take_profit_pct: float = TAKE_PROFIT_PCT,
+    vix_abs_floor: float = VIX_ABS_FLOOR,
+    root: str = "SPY",
+    commission_per_contract: float = COMMISSION_PER_CONTRACT,
+    slippage_per_share: float = SLIPPAGE_PER_SHARE,
 ) -> Optional[Dict]:
     """
     Simulate a single iron condor trade.
 
-    Dispatches to ThetaData or synthetic path based on date and flags.
+    Features:
+        - SMA trend filter: above SMA = full condor, below SMA = skip (returns "skip_sma")
+        - VIX absolute floor: skip if VIX < vix_abs_floor
+        - Flat delta: fixed delta across all IV tiers
+        - Credit-based stop loss (3x credit)
+        - Time-based exit at DTE_EXIT days remaining
+        - Transaction costs (commission + slippage)
+        - Asymmetric (broken-wing) support via put_wing_mult/call_wing_mult
 
-    Args:
-        call_delta_offset: Offset applied to call delta (e.g. -0.05 pushes
-            calls further OTM). Default 0.0 preserves symmetric behavior.
-
-    Returns a result dict or None if the trade cannot be constructed.
+    Returns a result dict, "skip_sma", "skip_vix", or None.
     """
-    root = "SPY"
+
+    # 0. VIX absolute floor check
+    if vix < vix_abs_floor:
+        return "skip_vix"
 
     # 1. IV rank from VIX history
     iv_rank = compute_vix_iv_rank(vix, vix_history, entry_date)
     if iv_rank is None:
         return None
 
-    # 2. Delta selection
-    short_delta, iv_tier = select_delta_tier(iv_rank)
+    # 2. Delta selection (with flat delta support)
+    short_delta, iv_tier = select_delta_tier(iv_rank, flat_delta=flat_delta,
+                                              iv_rank_low=iv_rank_low)
     if short_delta is None:
         return None  # IV too low
 
@@ -458,7 +507,10 @@ def simulate_condor_trade(
         return None  # offset too aggressive
 
     # 3. Build target strikes via B-S delta
-    targets = build_condor_strikes(spot, vix, put_delta, call_delta)
+    targets = build_condor_strikes(spot, vix, put_delta, call_delta,
+                                    wing_width_pct=wing_width_pct,
+                                    put_wing_mult=put_wing_mult,
+                                    call_wing_mult=call_wing_mult)
     if targets is None:
         return None
 
@@ -466,7 +518,6 @@ def simulate_condor_trade(
     is_synthetic = use_synthetic or entry_date < THETADATA_START
 
     if is_synthetic:
-        # Synthetic path: use B-S strikes directly (rounded to $1)
         strikes = targets
         dte = DTE_TARGET
         expiration_date = (datetime.strptime(entry_date, "%Y-%m-%d").date()
@@ -477,7 +528,6 @@ def simulate_condor_trade(
             return None
 
     else:
-        # ThetaData path: snap to real strikes and use real quotes
         expiration = client.find_nearest_expiration(root, entry_date,
                                                      DTE_TARGET, DTE_MIN, DTE_MAX)
         if expiration is None:
@@ -498,9 +548,16 @@ def simulate_condor_trade(
     max_loss = pricing["max_loss"]
     data_source = pricing["data_source"]
 
-    # Exit thresholds
-    tp_target = credit * TAKE_PROFIT_PCT
-    sl_loss = max_loss * STOP_LOSS_PCT
+    # Transaction costs (4 legs)
+    entry_slippage = slippage_per_share * 4  # 4 legs
+    effective_credit = credit - entry_slippage
+    exit_slippage = slippage_per_share * 4
+    round_trip_commission = commission_per_contract * 2
+    total_transaction_costs = (entry_slippage + exit_slippage) * 100 + round_trip_commission
+
+    # Exit thresholds (credit-based stop loss)
+    tp_target = credit * take_profit_pct
+    sl_threshold = stop_loss_mult * credit
 
     # 5. Walk each trading day from entry+1 to expiration
     entry_idx = bar_idx_map.get(entry_date)
@@ -523,11 +580,12 @@ def simulate_condor_trade(
             break
 
         current_spot = bar["close"]
+        days_remaining = (exp_dt - d_dt).days
 
         # On expiration day: intrinsic settlement
         if d_dt == exp_dt:
             settle_cost = intrinsic_settlement(current_spot, strikes)
-            pnl = (credit - settle_cost) * 100
+            pnl = (effective_credit - settle_cost - exit_slippage) * 100 - round_trip_commission
             exit_date = d
             exit_reason = "expiration"
             exit_pnl = pnl
@@ -539,12 +597,11 @@ def simulate_condor_trade(
 
         # Daily re-pricing
         if is_synthetic:
-            days_left = (exp_dt - d_dt).days
             vix_today = vix_history.get(d)
             if vix_today is None:
                 continue
             close_cost = price_condor_on_date_synthetic(
-                current_spot, strikes, vix_today, days_left)
+                current_spot, strikes, vix_today, days_remaining)
         else:
             close_cost = price_condor_on_date_thetadata(
                 client, root, expiration_date, strikes, d)
@@ -552,24 +609,31 @@ def simulate_condor_trade(
         if close_cost is None:
             continue
 
-        pnl = (credit - close_cost) * 100
+        raw_pnl = (credit - close_cost) * 100
 
         # Take profit
         if close_cost <= tp_target:
             exit_date = d
             exit_reason = "take_profit"
-            exit_pnl = pnl
+            exit_pnl = (effective_credit - close_cost - exit_slippage) * 100 - round_trip_commission
             break
 
-        # Stop loss
-        if pnl <= -sl_loss:
+        # Stop loss (credit-based)
+        if raw_pnl <= -(sl_threshold * 100):
             exit_date = d
             exit_reason = "stop_loss"
-            exit_pnl = pnl
+            exit_pnl = (effective_credit - close_cost - exit_slippage) * 100 - round_trip_commission
             if current_spot < strikes["short_put"]:
                 side_breached = "put"
             elif current_spot > strikes["short_call"]:
                 side_breached = "call"
+            break
+
+        # Time-based exit at DTE_EXIT
+        if days_remaining <= DTE_EXIT:
+            exit_date = d
+            exit_reason = "time_exit"
+            exit_pnl = (effective_credit - close_cost - exit_slippage) * 100 - round_trip_commission
             break
 
     # Fallback: settle at intrinsic using last bar before expiration
@@ -580,7 +644,7 @@ def simulate_condor_trade(
             d_dt = datetime.strptime(bar["bar_date"], "%Y-%m-%d").date()
             if d_dt <= exp_dt:
                 settle_cost = intrinsic_settlement(bar["close"], strikes)
-                exit_pnl = (credit - settle_cost) * 100
+                exit_pnl = (effective_credit - settle_cost - exit_slippage) * 100 - round_trip_commission
                 exit_date = bar["bar_date"]
                 exit_reason = "expiration_fallback"
                 if bar["close"] < strikes["short_put"]:
@@ -614,12 +678,14 @@ def simulate_condor_trade(
         "max_loss": max_loss,
         "pnl": round(exit_pnl, 2),
         "won": exit_pnl > 0,
+        "transaction_costs": round(total_transaction_costs, 2),
         "exit_reason": exit_reason,
         "side_breached": side_breached,
         "put_width": pricing["put_width"],
         "call_width": pricing["call_width"],
         "data_source": data_source,
         "dte": dte_actual,
+        "sma_value": round(sma_value, 2) if sma_value is not None else None,
     }
 
 
@@ -627,9 +693,36 @@ def simulate_condor_trade(
 # Step 8 -- Main Backtest Loop
 # ===================================================================
 
+def check_sma_filter(spy_bars: List[Dict], idx: int, sma_period: int) -> Tuple[bool, Optional[float]]:
+    """
+    Check if current price is above its SMA.
+    Returns (passes_filter, sma_value).
+    If sma_period <= 0, returns (True, None) (filter disabled).
+    """
+    if sma_period <= 0:
+        return True, None
+    if idx < sma_period:
+        return False, None
+    closes = [spy_bars[i]["close"] for i in range(idx - sma_period + 1, idx + 1)]
+    sma = sum(closes) / len(closes)
+    return spy_bars[idx]["close"] > sma, sma
+
+
 def run_backtest(start_year: int = 2012, end_year: int = 2026,
                  synthetic_only: bool = False,
-                 call_delta_offset: float = 0.0) -> List[Dict]:
+                 call_delta_offset: float = 0.0,
+                 flat_delta: float = DEFAULT_FLAT_DELTA,
+                 iv_rank_low: float = None,
+                 sma_period: int = SMA_PERIOD,
+                 wing_width_pct: float = None,
+                 put_wing_mult: float = 1.0,
+                 call_wing_mult: float = 1.0,
+                 stop_loss_mult: float = STOP_LOSS_MULT,
+                 take_profit_pct: float = TAKE_PROFIT_PCT,
+                 vix_abs_floor: float = VIX_ABS_FLOOR,
+                 root: str = "SPY",
+                 commission_per_contract: float = COMMISSION_PER_CONTRACT,
+                 slippage_per_share: float = SLIPPAGE_PER_SHARE) -> tuple:
     """
     Run the full ThetaData iron condor backtest.
 
@@ -637,65 +730,109 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
         start_year: First year to backtest
         end_year: Last year to backtest
         synthetic_only: If True, use B-S for all dates (no ThetaData needed)
-        call_delta_offset: Offset applied to call delta (e.g. -0.05 pushes
-            calls further OTM). Default 0.0 preserves symmetric behavior.
+        call_delta_offset: Offset applied to call delta (e.g. -0.05)
+        flat_delta: Fixed delta for all tiers (0 = use tier-based)
+        iv_rank_low: IV rank floor override (None = use IV_RANK_LOW constant)
+        sma_period: SMA trend filter period (0 = disabled)
+        wing_width_pct: Wing width as fraction of spot (None = use WING_WIDTH_PCT)
+        put_wing_mult: Put wing multiplier for broken-wing condors
+        call_wing_mult: Call wing multiplier for broken-wing condors
+        stop_loss_mult: Credit multiplier for stop loss (3.0 = stop at 3x credit)
+        take_profit_pct: Close threshold as fraction of credit (0.25 = close when
+            cost-to-close <= 25% of credit, capturing 75% profit)
+        vix_abs_floor: Minimum VIX level to enter trades
+        root: Ticker symbol
+        commission_per_contract: Commission per contract per side
+        slippage_per_share: Slippage per share per leg
     """
     start = f"{start_year}-01-01"
     end = f"{end_year}-12-31"
+    effective_iv_rank_low = iv_rank_low if iv_rank_low is not None else IV_RANK_LOW
 
     log.info("=" * 70)
-    log.info("THETADATA IRON CONDOR BACKTEST  --  SPY  %s to %s", start, end)
+    log.info("THETADATA IRON CONDOR BACKTEST  --  %s  %s to %s", root, start, end)
     if synthetic_only:
         log.info("  MODE: Synthetic only (Black-Scholes)")
     else:
         log.info("  MODE: ThetaData real quotes + synthetic fallback")
+    log.info("  DELTA:      %s", f"flat {flat_delta:.2f}" if flat_delta > 0 else "tier-based")
+    log.info("  SMA PERIOD: %s", f"{sma_period}-day" if sma_period > 0 else "OFF")
+    log.info("  STOP LOSS:  %.1fx credit", stop_loss_mult)
+    log.info("  TAKE PROFIT: close when cost-to-close <= %.0f%% of credit (%.0f%% captured)",
+             take_profit_pct * 100, (1 - take_profit_pct) * 100)
+    log.info("  IV RANK:    >= %.0f%%", effective_iv_rank_low * 100)
+    log.info("  VIX FLOOR:  >= %.0f", vix_abs_floor)
+    log.info("  DTE TARGET: %d (exit at %d DTE)", DTE_TARGET, DTE_EXIT)
+    wwp = wing_width_pct if wing_width_pct is not None else WING_WIDTH_PCT
+    log.info("  WING WIDTH: %.0f%% of spot", wwp * 100)
+    if put_wing_mult != 1.0 or call_wing_mult != 1.0:
+        log.info("  BROKEN WING: put=%.1fx, call=%.1fx", put_wing_mult, call_wing_mult)
     if call_delta_offset != 0.0:
-        log.info("  CALL DELTA OFFSET: %+.2f (asymmetric wings)", call_delta_offset)
+        log.info("  CALL DELTA OFFSET: %+.2f (asymmetric)", call_delta_offset)
     log.info("=" * 70)
 
     # Initialize client
     client = ThetaDataClient()
 
-    # Check ThetaData connection (not needed for synthetic-only)
     if not synthetic_only:
         if not client.connect():
             log.warning("Theta Terminal not available. Falling back to synthetic-only mode.")
             synthetic_only = True
 
-    # Phase 0: One-time data fetch
+    # Data fetch with lookback for SMA
+    lookback_days = max(400, sma_period * 2) if sma_period > 0 else 400
     lookback_start = (datetime.strptime(start, "%Y-%m-%d").date()
-                      - timedelta(days=400)).isoformat()
+                      - timedelta(days=lookback_days)).isoformat()
 
     vix_history = client.fetch_vix_history(lookback_start, end)
     if not vix_history:
         log.error("Cannot proceed without VIX data")
-        return []
+        return [], 0, 0, 0, 0
 
-    spy_bars = client.fetch_spy_bars(start, end)
+    spy_bars = client.fetch_ticker_bars(root, lookback_start, end)
     if not spy_bars:
-        log.error("No SPY bars available")
-        return []
-
-    # Also load the lookback period bars for any overlap
-    lookback_bars = client.fetch_spy_bars(lookback_start, end)
+        log.error("No %s bars available", root)
+        return [], 0, 0, 0, 0
 
     bar_idx_map = {b["bar_date"]: i for i, b in enumerate(spy_bars)}
-    log.info("SPY bars: %d trading days (%s to %s)",
-             len(spy_bars), spy_bars[0]["bar_date"], spy_bars[-1]["bar_date"])
 
-    # Phase 1: Walk dates
+    # Find the start index in the bar array
+    start_idx = 0
+    for i, b in enumerate(spy_bars):
+        if b["bar_date"] >= start:
+            start_idx = i
+            break
+
+    log.info("%s bars: %d total (%s to %s), backtest starts at idx %d (%s)",
+             root, len(spy_bars), spy_bars[0]["bar_date"], spy_bars[-1]["bar_date"],
+             start_idx, spy_bars[start_idx]["bar_date"])
+
+    # Walk dates
     trades: List[Dict] = []
+    skipped_sma = 0
     skipped_iv = 0
+    skipped_vix = 0
     skipped_data = 0
-    last_entry_idx = -ENTRY_INTERVAL
+    last_entry_idx = start_idx - ENTRY_INTERVAL
 
-    for idx in range(len(spy_bars)):
+    for idx in range(start_idx, len(spy_bars)):
         if idx - last_entry_idx < ENTRY_INTERVAL:
             continue
 
         bar = spy_bars[idx]
         entry_date = bar["bar_date"]
+
+        if entry_date > end:
+            break
+
         spot = bar["close"]
+
+        # SMA trend filter
+        passes_sma, sma_value = check_sma_filter(spy_bars, idx, sma_period)
+        if not passes_sma:
+            skipped_sma += 1
+            last_entry_idx = idx
+            continue
 
         # Get VIX for this date
         vix = vix_history.get(entry_date)
@@ -711,7 +848,7 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
 
         # IV rank pre-check
         iv_rank = compute_vix_iv_rank(vix, vix_history, entry_date)
-        if iv_rank is not None and iv_rank < IV_RANK_LOW:
+        if iv_rank is not None and iv_rank < effective_iv_rank_low:
             skipped_iv += 1
             last_entry_idx = idx
             continue
@@ -721,11 +858,34 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
             client, entry_date, spot, vix, vix_history,
             spy_bars, bar_idx_map, use_synthetic=synthetic_only,
             call_delta_offset=call_delta_offset,
+            flat_delta=flat_delta,
+            iv_rank_low=effective_iv_rank_low,
+            sma_value=sma_value,
+            sma_period=sma_period,
+            wing_width_pct=wing_width_pct,
+            put_wing_mult=put_wing_mult,
+            call_wing_mult=call_wing_mult,
+            stop_loss_mult=stop_loss_mult,
+            take_profit_pct=take_profit_pct,
+            vix_abs_floor=vix_abs_floor,
+            root=root,
+            commission_per_contract=commission_per_contract,
+            slippage_per_share=slippage_per_share,
         )
+
+        if result == "skip_sma":
+            skipped_sma += 1
+            last_entry_idx = idx
+            continue
+
+        if result == "skip_vix":
+            skipped_vix += 1
+            last_entry_idx = idx
+            continue
 
         if result is None:
             skipped_data += 1
-            last_entry_idx = idx  # still consume the 5-day cooldown
+            last_entry_idx = idx
             continue
 
         trades.append(result)
@@ -735,11 +895,11 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
             log.info("  ... %d trades so far (entry %s, source=%s)",
                      len(trades), entry_date, result["data_source"])
 
-    log.info("Backtest complete: %d trades  (%d skipped IV low, %d skipped data)",
-             len(trades), skipped_iv, skipped_data)
+    log.info("Backtest complete: %d trades  (skip: %d SMA, %d IV, %d VIX, %d data)",
+             len(trades), skipped_sma, skipped_iv, skipped_vix, skipped_data)
 
     client.close()
-    return trades
+    return trades, skipped_sma, skipped_iv, skipped_vix, skipped_data
 
 
 # ===================================================================
@@ -753,7 +913,11 @@ def get_vix_bucket(vix: float) -> str:
     return "Unknown"
 
 
-def print_results(trades: List[Dict]) -> None:
+def print_results(trades: List[Dict],
+                  skipped_sma: int = 0,
+                  skipped_iv: int = 0,
+                  skipped_vix: int = 0,
+                  skipped_data: int = 0) -> None:
     """Print comprehensive backtest results."""
     if not trades:
         print("\nNo trades to report.")
@@ -776,6 +940,9 @@ def print_results(trades: List[Dict]) -> None:
     print("THETADATA IRON CONDOR RESULTS  --  SPY")
     if is_asymmetric:
         print(f"  Call Delta Offset: {sample_offset:+.2f} (asymmetric wings)")
+    sma_val = trades[0].get("sma_value")
+    if sma_val is not None:
+        print(f"  SMA Filter:      200-day SMA (active)")
     print("=" * 70)
     print(f"  Period:          {trades[0]['entry_date']} to {trades[-1]['entry_date']}")
     print(f"  Total trades:    {len(trades)}")
@@ -799,6 +966,30 @@ def print_results(trades: List[Dict]) -> None:
     call_breaches = sum(1 for t in trades if t["side_breached"] == "call")
     print(f"\n  Put breaches:    {put_breaches}")
     print(f"  Call breaches:   {call_breaches}")
+
+    # Transaction cost summary
+    total_costs = sum(t.get("transaction_costs", 0) for t in trades)
+    if total_costs > 0:
+        avg_cost = total_costs / len(trades)
+        print(f"\n  --- Transaction Costs ---")
+        print(f"  Total costs:     ${total_costs:>,.2f}")
+        print(f"  Avg cost/trade:  ${avg_cost:>,.2f}")
+        if total_pnl != 0:
+            print(f"  Cost % of P&L:   {total_costs / abs(total_pnl) * 100:.1f}%")
+
+    # Filter statistics
+    total_opportunities = len(trades) + skipped_sma + skipped_iv + skipped_vix + skipped_data
+    if skipped_sma > 0:
+        print(f"\n  --- Filter Statistics ---")
+        print(f"  Blocked by SMA:  {skipped_sma}")
+    if skipped_iv > 0:
+        print(f"  Blocked by IV:   {skipped_iv}")
+    if skipped_vix > 0:
+        print(f"  Blocked by VIX:  {skipped_vix}")
+    if skipped_data > 0:
+        print(f"  Blocked by data: {skipped_data}")
+    if total_opportunities > 0:
+        print(f"  Trade rate:      {len(trades) / total_opportunities:.1%} of opportunities")
 
     # --- Data source breakdown ---
     print()
@@ -958,7 +1149,7 @@ def export_csv(trades: List[Dict], filepath: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ThetaData iron condor backtest for SPY (2012-2026)")
+        description="ThetaData iron condor backtest (2012-2026)")
     parser.add_argument("--year", type=int, default=None,
                         help="Run for a single year (e.g. 2024)")
     parser.add_argument("--start", type=int, default=None,
@@ -967,10 +1158,41 @@ def main():
                         help="End year (e.g. 2025)")
     parser.add_argument("--synthetic-only", action="store_true",
                         help="Use Black-Scholes only (no ThetaData needed)")
+    parser.add_argument("--ticker", type=str, default="SPY",
+                        metavar="SYM", help="Ticker symbol (default SPY)")
+    parser.add_argument("--flat-delta", type=float, default=DEFAULT_FLAT_DELTA,
+                        metavar="DELTA",
+                        help=f"Fixed delta for all tiers "
+                             f"(default {DEFAULT_FLAT_DELTA}, 0 = tier-based)")
+    parser.add_argument("--sma-period", type=int, default=SMA_PERIOD,
+                        metavar="PERIOD",
+                        help=f"SMA trend filter period (default {SMA_PERIOD}, 0 = disabled)")
+    parser.add_argument("--stop-loss-mult", type=float, default=STOP_LOSS_MULT,
+                        metavar="MULT",
+                        help=f"Stop loss as multiple of credit (default {STOP_LOSS_MULT})")
+    parser.add_argument("--take-profit-pct", type=float, default=TAKE_PROFIT_PCT * 100,
+                        metavar="PCT",
+                        help=f"Close when cost-to-close <= this %% of credit "
+                             f"(default {TAKE_PROFIT_PCT * 100:.0f} = capture "
+                             f"{(1 - TAKE_PROFIT_PCT) * 100:.0f}%% profit)")
+    parser.add_argument("--iv-rank-low", type=float, default=IV_RANK_LOW * 100,
+                        metavar="PCT",
+                        help=f"Minimum IV rank to enter (default {IV_RANK_LOW * 100:.0f}%%)")
+    parser.add_argument("--vix-floor", type=float, default=VIX_ABS_FLOOR,
+                        metavar="VIX",
+                        help=f"Minimum VIX to enter (default {VIX_ABS_FLOOR:.0f})")
+    parser.add_argument("--wing-width", type=float, default=WING_WIDTH_PCT * 100,
+                        metavar="PCT",
+                        help=f"Wing width as %% of spot (default {WING_WIDTH_PCT * 100:.0f})")
+    parser.add_argument("--put-wing-mult", type=float, default=1.0,
+                        metavar="MULT",
+                        help="Put wing multiplier for broken-wing (default 1.0)")
+    parser.add_argument("--call-wing-mult", type=float, default=1.0,
+                        metavar="MULT",
+                        help="Call wing multiplier for broken-wing (default 1.0)")
     parser.add_argument("--call-delta-offset", type=float, default=0.0,
                         metavar="OFFSET",
-                        help="Offset applied to call delta (e.g. -0.05 pushes "
-                             "calls further OTM). Default 0 = symmetric.")
+                        help="Offset applied to call delta (e.g. -0.05). Default 0 = symmetric.")
     parser.add_argument("--export-csv", type=str, default=None,
                         metavar="FILE",
                         help="Export trades to CSV file")
@@ -987,12 +1209,25 @@ def main():
         end_year = 2026
 
     t0 = time.time()
-    trades = run_backtest(start_year, end_year,
-                          synthetic_only=args.synthetic_only,
-                          call_delta_offset=args.call_delta_offset)
+    result = run_backtest(
+        start_year, end_year,
+        synthetic_only=args.synthetic_only,
+        call_delta_offset=args.call_delta_offset,
+        flat_delta=args.flat_delta,
+        iv_rank_low=args.iv_rank_low / 100.0,
+        sma_period=args.sma_period,
+        wing_width_pct=args.wing_width / 100.0,
+        put_wing_mult=args.put_wing_mult,
+        call_wing_mult=args.call_wing_mult,
+        stop_loss_mult=args.stop_loss_mult,
+        take_profit_pct=args.take_profit_pct / 100.0,
+        vix_abs_floor=args.vix_floor,
+        root=args.ticker.upper(),
+    )
+    trades, skipped_sma, skipped_iv, skipped_vix, skipped_data = result
     elapsed = time.time() - t0
 
-    print_results(trades)
+    print_results(trades, skipped_sma, skipped_iv, skipped_vix, skipped_data)
 
     if args.export_csv:
         export_csv(trades, args.export_csv)
