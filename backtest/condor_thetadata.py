@@ -146,9 +146,11 @@ def build_condor_strikes(spot: float, vix: float,
                          call_delta: float = None,
                          wing_width_pct: float = None,
                          put_wing_mult: float = 1.0,
-                         call_wing_mult: float = 1.0) -> Optional[Dict[str, float]]:
+                         call_wing_mult: float = 1.0,
+                         mode: str = "condor",
+                         dte_target: int = DTE_TARGET) -> Optional[Dict[str, float]]:
     """
-    Build 4 target strikes using B-S delta targeting.
+    Build target strikes using B-S delta targeting.
 
     Args:
         spot: Current underlying price
@@ -158,9 +160,10 @@ def build_condor_strikes(spot: float, vix: float,
         wing_width_pct: Override wing width (fraction of spot). Defaults to WING_WIDTH_PCT.
         put_wing_mult: Multiplier for put wing width (>1.0 for broken-wing condor)
         call_wing_mult: Multiplier for call wing width
+        mode: "condor" (4 legs), "put_only" (2 legs), or "call_only" (2 legs)
+        dte_target: Target days to expiration for delta calculation
 
-    Returns dict with keys: long_put, short_put, short_call, long_call
-    or None if delta solve fails.
+    Returns dict with strike keys, or None if delta solve fails.
     """
     if call_delta is None:
         call_delta = put_delta
@@ -168,74 +171,89 @@ def build_condor_strikes(spot: float, vix: float,
         wing_width_pct = WING_WIDTH_PCT
 
     vix_decimal = vix / 100.0
-    dte_years = DTE_TARGET / 365.0
-
-    sp_raw = find_strike_for_delta(spot, dte_years, RISK_FREE_RATE,
-                                   vix_decimal, -put_delta, "P")
-    sc_raw = find_strike_for_delta(spot, dte_years, RISK_FREE_RATE,
-                                   vix_decimal, call_delta, "C")
-
-    if sp_raw is None or sc_raw is None:
-        return None
-
-    # Round to $1 increments (SPY)
-    sp_strike = round(sp_raw)
-    sc_strike = round(sc_raw)
-
-    # Validate shorts are OTM
-    if sp_strike >= spot or sc_strike <= spot:
-        return None
-
-    # Wing width with minimum floor, supporting asymmetric (broken-wing) wings
+    dte_years = dte_target / 365.0
     base_wing = max(round(spot * wing_width_pct), MIN_WING_WIDTH)
-    put_wing = max(round(base_wing * put_wing_mult), MIN_WING_WIDTH)
-    call_wing = max(round(base_wing * call_wing_mult), MIN_WING_WIDTH)
 
-    lp_strike = sp_strike - put_wing
-    lc_strike = sc_strike + call_wing
+    result = {}
 
-    if lp_strike >= sp_strike or lc_strike <= sc_strike:
-        return None
+    # Build put side
+    if mode in ("condor", "put_only"):
+        sp_raw = find_strike_for_delta(spot, dte_years, RISK_FREE_RATE,
+                                       vix_decimal, -put_delta, "P")
+        if sp_raw is None:
+            return None
+        sp_strike = round(sp_raw)
+        if sp_strike >= spot:
+            return None
+        put_wing = max(round(base_wing * put_wing_mult), MIN_WING_WIDTH)
+        lp_strike = sp_strike - put_wing
+        if lp_strike >= sp_strike:
+            return None
+        result["short_put"] = float(sp_strike)
+        result["long_put"] = float(lp_strike)
 
-    return {
-        "long_put": float(lp_strike),
-        "short_put": float(sp_strike),
-        "short_call": float(sc_strike),
-        "long_call": float(lc_strike),
-    }
+    # Build call side
+    if mode in ("condor", "call_only"):
+        sc_raw = find_strike_for_delta(spot, dte_years, RISK_FREE_RATE,
+                                       vix_decimal, call_delta, "C")
+        if sc_raw is None:
+            return None
+        sc_strike = round(sc_raw)
+        if sc_strike <= spot:
+            return None
+        call_wing = max(round(base_wing * call_wing_mult), MIN_WING_WIDTH)
+        lc_strike = sc_strike + call_wing
+        if lc_strike <= sc_strike:
+            return None
+        result["short_call"] = float(sc_strike)
+        result["long_call"] = float(lc_strike)
+
+    return result if result else None
 
 
 def validate_and_snap_strikes(client: ThetaDataClient, targets: Dict[str, float],
                                root: str, expiration: str,
                                spot: float = None) -> Optional[Dict[str, float]]:
     """
-    Snap 4 target strikes to nearest real ThetaData strikes.
-    Validates LP < SP < SC < LC after snapping, and that shorts are OTM.
+    Snap target strikes to nearest real ThetaData strikes.
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations.
 
     Returns snapped strikes dict or None if validation fails.
     """
     snapped = {}
     for leg in ("long_put", "short_put", "short_call", "long_call"):
+        if leg not in targets:
+            continue
         s = client.snap_strike(root, expiration, targets[leg])
         if s is None:
             return None
         snapped[leg] = s
 
-    # Validate structure
-    if not (snapped["long_put"] < snapped["short_put"]
-            < snapped["short_call"] < snapped["long_call"]):
-        return None
+    has_puts = "short_put" in snapped and "long_put" in snapped
+    has_calls = "short_call" in snapped and "long_call" in snapped
 
-    # Validate shorts are OTM
-    if spot is not None:
-        if snapped["short_put"] >= spot or snapped["short_call"] <= spot:
+    # Validate put side
+    if has_puts:
+        if snapped["long_put"] >= snapped["short_put"]:
+            return None
+        if spot is not None and snapped["short_put"] >= spot:
+            return None
+        if snapped["short_put"] - snapped["long_put"] < MIN_WING_WIDTH:
             return None
 
-    # Validate minimum wing width after snapping
-    put_width = snapped["short_put"] - snapped["long_put"]
-    call_width = snapped["long_call"] - snapped["short_call"]
-    if put_width < MIN_WING_WIDTH or call_width < MIN_WING_WIDTH:
-        return None
+    # Validate call side
+    if has_calls:
+        if snapped["short_call"] >= snapped["long_call"]:
+            return None
+        if spot is not None and snapped["short_call"] <= spot:
+            return None
+        if snapped["long_call"] - snapped["short_call"] < MIN_WING_WIDTH:
+            return None
+
+    # Validate condor structure (puts below calls)
+    if has_puts and has_calls:
+        if snapped["short_put"] >= snapped["short_call"]:
+            return None
 
     return snapped
 
@@ -248,17 +266,20 @@ def price_condor_entry_thetadata(client: ThetaDataClient, root: str,
                                   expiration: str, strikes: Dict[str, float],
                                   entry_date: str) -> Optional[Dict]:
     """
-    Price condor entry using real ThetaData bid/ask quotes.
+    Price entry using real ThetaData bid/ask quotes.
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations.
 
     Pre-fetches all quotes through expiration for later daily management.
     Returns dict with credit, max_loss, or None if data missing.
     """
-    legs = {
-        "long_put":   ("P", strikes["long_put"]),
-        "short_put":  ("P", strikes["short_put"]),
-        "short_call": ("C", strikes["short_call"]),
-        "long_call":  ("C", strikes["long_call"]),
+    leg_defs = {
+        "long_put":   ("P",), "short_put":  ("P",),
+        "short_call": ("C",), "long_call":  ("C",),
     }
+    legs = {}
+    for leg_name, (right,) in leg_defs.items():
+        if leg_name in strikes:
+            legs[leg_name] = (right, strikes[leg_name])
 
     # Pre-fetch EOD data for all 4 legs (entry through expiration)
     prefetched = {}
@@ -295,14 +316,19 @@ def price_condor_entry_thetadata(client: ThetaDataClient, root: str,
         entry_quotes[leg_name] = q
 
     # Credit = sell shorts at bid, buy longs at ask
-    credit = (entry_quotes["short_put"]["bid"] + entry_quotes["short_call"]["bid"]
-              - entry_quotes["long_put"]["ask"] - entry_quotes["long_call"]["ask"])
+    credit = 0.0
+    for leg_name in ("short_put", "short_call"):
+        if leg_name in entry_quotes:
+            credit += entry_quotes[leg_name]["bid"]
+    for leg_name in ("long_put", "long_call"):
+        if leg_name in entry_quotes:
+            credit -= entry_quotes[leg_name]["ask"]
 
     if credit <= 0:
         return None
 
-    put_width = strikes["short_put"] - strikes["long_put"]
-    call_width = strikes["long_call"] - strikes["short_call"]
+    put_width = (strikes["short_put"] - strikes["long_put"]) if "short_put" in strikes else 0
+    call_width = (strikes["long_call"] - strikes["short_call"]) if "short_call" in strikes else 0
     max_width = max(put_width, call_width)
 
     # Reject if credit exceeds max ratio of wing width
@@ -329,38 +355,69 @@ def price_condor_entry_thetadata(client: ThetaDataClient, root: str,
 def price_condor_entry_synthetic(spot: float, strikes: Dict[str, float],
                                   vix: float, dte: int) -> Optional[Dict]:
     """
-    Price condor entry using Black-Scholes with synthetic bid/ask spread.
+    Price condor/spread entry using Black-Scholes with synthetic bid/ask spread.
     Used for dates before ThetaData coverage (Jan-May 2012).
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations.
     """
     vix_decimal = vix / 100.0
     t_years = dte / 365.0
 
-    result = calculate_condor_price_realistic(
-        spot,
-        strikes["long_put"],
-        strikes["short_put"],
-        strikes["short_call"],
-        strikes["long_call"],
-        t_years,
-        RISK_FREE_RATE,
-        vix_decimal,
-        bid_ask_spread_pct=SYNTHETIC_SPREAD_PCT,
-        use_skew=True,
-    )
+    has_puts = "short_put" in strikes and "long_put" in strikes
+    has_calls = "short_call" in strikes and "long_call" in strikes
 
-    if result is None or result["open_credit"] <= 0:
+    if has_puts and has_calls:
+        # Full condor - use existing function
+        result = calculate_condor_price_realistic(
+            spot,
+            strikes["long_put"],
+            strikes["short_put"],
+            strikes["short_call"],
+            strikes["long_call"],
+            t_years,
+            RISK_FREE_RATE,
+            vix_decimal,
+            bid_ask_spread_pct=SYNTHETIC_SPREAD_PCT,
+            use_skew=True,
+        )
+        if result is None or result["open_credit"] <= 0:
+            return None
+        credit = result["open_credit"]
+        put_width = result["put_width"]
+        call_width = result["call_width"]
+    else:
+        # 2-leg spread - price with B-S directly
+        credit = 0.0
+        if has_puts:
+            sp_price = black_scholes_price(spot, strikes["short_put"], t_years,
+                                           RISK_FREE_RATE, vix_decimal, "P")
+            lp_price = black_scholes_price(spot, strikes["long_put"], t_years,
+                                           RISK_FREE_RATE, vix_decimal, "P")
+            mid_credit = sp_price - lp_price
+            credit = mid_credit * (1 - SYNTHETIC_SPREAD_PCT)
+        if has_calls:
+            sc_price = black_scholes_price(spot, strikes["short_call"], t_years,
+                                           RISK_FREE_RATE, vix_decimal, "C")
+            lc_price = black_scholes_price(spot, strikes["long_call"], t_years,
+                                           RISK_FREE_RATE, vix_decimal, "C")
+            mid_credit = sc_price - lc_price
+            credit = mid_credit * (1 - SYNTHETIC_SPREAD_PCT)
+        put_width = (strikes["short_put"] - strikes["long_put"]) if has_puts else 0
+        call_width = (strikes["long_call"] - strikes["short_call"]) if has_calls else 0
+
+    if credit <= 0:
         return None
 
-    # Reject if credit exceeds max ratio of wing width
-    max_width = max(result["put_width"], result["call_width"])
-    if max_width > 0 and result["open_credit"] / max_width > MAX_CREDIT_RATIO:
+    max_width = max(put_width, call_width)
+    if max_width > 0 and credit / max_width > MAX_CREDIT_RATIO:
         return None
+
+    max_loss = (max_width - credit) * 100
 
     return {
-        "credit": round(result["open_credit"], 4),
-        "max_loss": round(result["max_loss"], 2),
-        "put_width": result["put_width"],
-        "call_width": result["call_width"],
+        "credit": round(credit, 4),
+        "max_loss": round(max_loss, 2),
+        "put_width": put_width,
+        "call_width": call_width,
         "data_source": "synthetic",
     }
 
@@ -373,17 +430,20 @@ def price_condor_on_date_thetadata(client: ThetaDataClient, root: str,
                                     expiration: str, strikes: Dict[str, float],
                                     price_date: str) -> Optional[float]:
     """
-    Re-price condor on a given date using cached ThetaData quotes.
+    Re-price condor/spread on a given date using cached ThetaData quotes.
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations.
 
     Returns cost to close (debit) or None if data missing.
     All data should already be cached from prefetch_option_life.
     """
-    legs = {
-        "long_put":   ("P", strikes["long_put"]),
-        "short_put":  ("P", strikes["short_put"]),
-        "short_call": ("C", strikes["short_call"]),
-        "long_call":  ("C", strikes["long_call"]),
+    leg_defs = {
+        "long_put":   ("P",), "short_put":  ("P",),
+        "short_call": ("C",), "long_call":  ("C",),
     }
+    legs = {}
+    for leg_name, (right,) in leg_defs.items():
+        if leg_name in strikes:
+            legs[leg_name] = (right, strikes[leg_name])
 
     quotes = {}
     for leg_name, (right, strike) in legs.items():
@@ -393,8 +453,13 @@ def price_condor_on_date_thetadata(client: ThetaDataClient, root: str,
         quotes[leg_name] = q
 
     # Cost to close = buy shorts at ask, sell longs at bid
-    close_debit = (quotes["short_put"]["ask"] + quotes["short_call"]["ask"]
-                   - quotes["long_put"]["bid"] - quotes["long_call"]["bid"])
+    close_debit = 0.0
+    for leg_name in ("short_put", "short_call"):
+        if leg_name in quotes:
+            close_debit += quotes[leg_name]["ask"]
+    for leg_name in ("long_put", "long_call"):
+        if leg_name in quotes:
+            close_debit -= quotes[leg_name]["bid"]
 
     return max(0.0, close_debit)
 
@@ -402,7 +467,8 @@ def price_condor_on_date_thetadata(client: ThetaDataClient, root: str,
 def price_condor_on_date_synthetic(spot: float, strikes: Dict[str, float],
                                     vix: float, dte: int) -> Optional[float]:
     """
-    Re-price condor on a given date using Black-Scholes.
+    Re-price condor/spread on a given date using Black-Scholes.
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations.
     Used for synthetic path (Jan-May 2012).
     """
     if dte <= 0:
@@ -411,20 +477,42 @@ def price_condor_on_date_synthetic(spot: float, strikes: Dict[str, float],
     vix_decimal = vix / 100.0
     t_years = dte / 365.0
 
-    close_cost = price_condor_to_close(
-        spot,
-        strikes["long_put"],
-        strikes["short_put"],
-        strikes["short_call"],
-        strikes["long_call"],
-        t_years,
-        RISK_FREE_RATE,
-        vix_decimal,
-        bid_ask_spread_pct=SYNTHETIC_SPREAD_PCT,
-        use_skew=True,
-    )
+    has_puts = "short_put" in strikes and "long_put" in strikes
+    has_calls = "short_call" in strikes and "long_call" in strikes
 
-    return close_cost
+    if has_puts and has_calls:
+        # Full condor - use existing function
+        close_cost = price_condor_to_close(
+            spot,
+            strikes["long_put"],
+            strikes["short_put"],
+            strikes["short_call"],
+            strikes["long_call"],
+            t_years,
+            RISK_FREE_RATE,
+            vix_decimal,
+            bid_ask_spread_pct=SYNTHETIC_SPREAD_PCT,
+            use_skew=True,
+        )
+        return close_cost
+
+    # 2-leg spread - cost to close = buy short at ask, sell long at bid
+    close_cost = 0.0
+    if has_puts:
+        sp_price = black_scholes_price(spot, strikes["short_put"], t_years,
+                                       RISK_FREE_RATE, vix_decimal, "P")
+        lp_price = black_scholes_price(spot, strikes["long_put"], t_years,
+                                       RISK_FREE_RATE, vix_decimal, "P")
+        # close = buy back short at ask, sell long at bid
+        close_cost = sp_price * (1 + SYNTHETIC_SPREAD_PCT) - lp_price * (1 - SYNTHETIC_SPREAD_PCT)
+    if has_calls:
+        sc_price = black_scholes_price(spot, strikes["short_call"], t_years,
+                                       RISK_FREE_RATE, vix_decimal, "C")
+        lc_price = black_scholes_price(spot, strikes["long_call"], t_years,
+                                       RISK_FREE_RATE, vix_decimal, "C")
+        close_cost = sc_price * (1 + SYNTHETIC_SPREAD_PCT) - lc_price * (1 - SYNTHETIC_SPREAD_PCT)
+
+    return max(0.0, close_cost)
 
 
 # ===================================================================
@@ -432,13 +520,17 @@ def price_condor_on_date_synthetic(spot: float, strikes: Dict[str, float],
 # ===================================================================
 
 def intrinsic_settlement(spot: float, strikes: Dict[str, float]) -> float:
-    """Compute settlement value at expiration from intrinsic values."""
-    sp_intrinsic = max(0, strikes["short_put"] - spot)
-    lp_intrinsic = max(0, strikes["long_put"] - spot)
-    sc_intrinsic = max(0, spot - strikes["short_call"])
-    lc_intrinsic = max(0, spot - strikes["long_call"])
-
-    settlement = (sp_intrinsic + sc_intrinsic) - (lp_intrinsic + lc_intrinsic)
+    """Compute settlement value at expiration from intrinsic values.
+    Supports 2-leg (put_only/call_only) and 4-leg (condor) configurations."""
+    settlement = 0.0
+    if "short_put" in strikes:
+        settlement += max(0, strikes["short_put"] - spot)
+    if "long_put" in strikes:
+        settlement -= max(0, strikes["long_put"] - spot)
+    if "short_call" in strikes:
+        settlement += max(0, spot - strikes["short_call"])
+    if "long_call" in strikes:
+        settlement -= max(0, spot - strikes["long_call"])
     return max(0.0, settlement)
 
 
@@ -469,6 +561,11 @@ def simulate_condor_trade(
     root: str = "SPY",
     commission_per_contract: float = COMMISSION_PER_CONTRACT,
     slippage_per_share: float = SLIPPAGE_PER_SHARE,
+    mode: str = "condor",
+    dte_target: int = DTE_TARGET,
+    dte_min: int = DTE_MIN,
+    dte_max: int = DTE_MAX,
+    dte_exit: int = DTE_EXIT,
 ) -> Optional[Dict]:
     """
     Simulate a single iron condor trade.
@@ -510,7 +607,9 @@ def simulate_condor_trade(
     targets = build_condor_strikes(spot, vix, put_delta, call_delta,
                                     wing_width_pct=wing_width_pct,
                                     put_wing_mult=put_wing_mult,
-                                    call_wing_mult=call_wing_mult)
+                                    call_wing_mult=call_wing_mult,
+                                    mode=mode,
+                                    dte_target=dte_target)
     if targets is None:
         return None
 
@@ -519,7 +618,7 @@ def simulate_condor_trade(
 
     if is_synthetic:
         strikes = targets
-        dte = DTE_TARGET
+        dte = dte_target
         expiration_date = (datetime.strptime(entry_date, "%Y-%m-%d").date()
                           + timedelta(days=dte)).isoformat()
 
@@ -529,7 +628,7 @@ def simulate_condor_trade(
 
     else:
         expiration = client.find_nearest_expiration(root, entry_date,
-                                                     DTE_TARGET, DTE_MIN, DTE_MAX)
+                                                     dte_target, dte_min, dte_max)
         if expiration is None:
             return None
 
@@ -548,11 +647,13 @@ def simulate_condor_trade(
     max_loss = pricing["max_loss"]
     data_source = pricing["data_source"]
 
-    # Transaction costs (4 legs)
-    entry_slippage = slippage_per_share * 4  # 4 legs
+    # Transaction costs (variable leg count)
+    num_legs = len(strikes)  # 2 for put_only/call_only, 4 for condor
+    leg_commission = commission_per_contract * num_legs / 4  # scale from 4-leg base
+    entry_slippage = slippage_per_share * num_legs
     effective_credit = credit - entry_slippage
-    exit_slippage = slippage_per_share * 4
-    round_trip_commission = commission_per_contract * 2
+    exit_slippage = slippage_per_share * num_legs
+    round_trip_commission = leg_commission * 2
     total_transaction_costs = (entry_slippage + exit_slippage) * 100 + round_trip_commission
 
     # Exit thresholds (credit-based stop loss)
@@ -589,9 +690,9 @@ def simulate_condor_trade(
             exit_date = d
             exit_reason = "expiration"
             exit_pnl = pnl
-            if current_spot < strikes["short_put"]:
+            if "short_put" in strikes and current_spot < strikes["short_put"]:
                 side_breached = "put"
-            elif current_spot > strikes["short_call"]:
+            elif "short_call" in strikes and current_spot > strikes["short_call"]:
                 side_breached = "call"
             break
 
@@ -623,14 +724,14 @@ def simulate_condor_trade(
             exit_date = d
             exit_reason = "stop_loss"
             exit_pnl = (effective_credit - close_cost - exit_slippage) * 100 - round_trip_commission
-            if current_spot < strikes["short_put"]:
+            if "short_put" in strikes and current_spot < strikes["short_put"]:
                 side_breached = "put"
-            elif current_spot > strikes["short_call"]:
+            elif "short_call" in strikes and current_spot > strikes["short_call"]:
                 side_breached = "call"
             break
 
-        # Time-based exit at DTE_EXIT
-        if days_remaining <= DTE_EXIT:
+        # Time-based exit at dte_exit
+        if days_remaining <= dte_exit:
             exit_date = d
             exit_reason = "time_exit"
             exit_pnl = (effective_credit - close_cost - exit_slippage) * 100 - round_trip_commission
@@ -638,7 +739,7 @@ def simulate_condor_trade(
 
     # Fallback: settle at intrinsic using last bar before expiration
     if exit_date is None:
-        for i in range(min(entry_idx + DTE_MAX + 10, len(spy_bars) - 1),
+        for i in range(min(entry_idx + dte_max + 10, len(spy_bars) - 1),
                        entry_idx, -1):
             bar = spy_bars[i]
             d_dt = datetime.strptime(bar["bar_date"], "%Y-%m-%d").date()
@@ -647,9 +748,9 @@ def simulate_condor_trade(
                 exit_pnl = (effective_credit - settle_cost - exit_slippage) * 100 - round_trip_commission
                 exit_date = bar["bar_date"]
                 exit_reason = "expiration_fallback"
-                if bar["close"] < strikes["short_put"]:
+                if "short_put" in strikes and bar["close"] < strikes["short_put"]:
                     side_breached = "put"
-                elif bar["close"] > strikes["short_call"]:
+                elif "short_call" in strikes and bar["close"] > strikes["short_call"]:
                     side_breached = "call"
                 break
 
@@ -670,10 +771,10 @@ def simulate_condor_trade(
         "put_delta": put_delta,
         "call_delta": round(call_delta, 4),
         "call_delta_offset": call_delta_offset,
-        "long_put": strikes["long_put"],
-        "short_put": strikes["short_put"],
-        "short_call": strikes["short_call"],
-        "long_call": strikes["long_call"],
+        "long_put": strikes.get("long_put"),
+        "short_put": strikes.get("short_put"),
+        "short_call": strikes.get("short_call"),
+        "long_call": strikes.get("long_call"),
         "credit": credit,
         "max_loss": max_loss,
         "pnl": round(exit_pnl, 2),
@@ -685,6 +786,7 @@ def simulate_condor_trade(
         "call_width": pricing["call_width"],
         "data_source": data_source,
         "dte": dte_actual,
+        "mode": mode,
         "sma_value": round(sma_value, 2) if sma_value is not None else None,
     }
 
@@ -722,7 +824,12 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
                  vix_abs_floor: float = VIX_ABS_FLOOR,
                  root: str = "SPY",
                  commission_per_contract: float = COMMISSION_PER_CONTRACT,
-                 slippage_per_share: float = SLIPPAGE_PER_SHARE) -> tuple:
+                 slippage_per_share: float = SLIPPAGE_PER_SHARE,
+                 mode: str = "condor",
+                 dte_target: int = DTE_TARGET,
+                 dte_min: int = DTE_MIN,
+                 dte_max: int = DTE_MAX,
+                 dte_exit: int = DTE_EXIT) -> tuple:
     """
     Run the full ThetaData iron condor backtest.
 
@@ -749,12 +856,14 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
     end = f"{end_year}-12-31"
     effective_iv_rank_low = iv_rank_low if iv_rank_low is not None else IV_RANK_LOW
 
+    mode_label = {"condor": "IRON CONDOR", "put_only": "PUT CREDIT SPREAD",
+                   "call_only": "CALL CREDIT SPREAD",
+                   "regime": "REGIME-BASED"}.get(mode, mode.upper())
+
     log.info("=" * 70)
-    log.info("THETADATA IRON CONDOR BACKTEST  --  %s  %s to %s", root, start, end)
-    if synthetic_only:
-        log.info("  MODE: Synthetic only (Black-Scholes)")
-    else:
-        log.info("  MODE: ThetaData real quotes + synthetic fallback")
+    log.info("THETADATA %s BACKTEST  --  %s  %s to %s", mode_label, root, start, end)
+    data_mode = "Synthetic only (Black-Scholes)" if synthetic_only else "ThetaData real quotes + synthetic fallback"
+    log.info("  MODE: %s (%s)", mode, data_mode)
     log.info("  DELTA:      %s", f"flat {flat_delta:.2f}" if flat_delta > 0 else "tier-based")
     log.info("  SMA PERIOD: %s", f"{sma_period}-day" if sma_period > 0 else "OFF")
     log.info("  STOP LOSS:  %.1fx credit", stop_loss_mult)
@@ -762,7 +871,7 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
              take_profit_pct * 100, (1 - take_profit_pct) * 100)
     log.info("  IV RANK:    >= %.0f%%", effective_iv_rank_low * 100)
     log.info("  VIX FLOOR:  >= %.0f", vix_abs_floor)
-    log.info("  DTE TARGET: %d (exit at %d DTE)", DTE_TARGET, DTE_EXIT)
+    log.info("  DTE TARGET: %d (exit at %d DTE)", dte_target, dte_exit)
     wwp = wing_width_pct if wing_width_pct is not None else WING_WIDTH_PCT
     log.info("  WING WIDTH: %.0f%% of spot", wwp * 100)
     if put_wing_mult != 1.0 or call_wing_mult != 1.0:
@@ -827,12 +936,22 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
 
         spot = bar["close"]
 
-        # SMA trend filter
+        # SMA trend filter / regime selection
         passes_sma, sma_value = check_sma_filter(spy_bars, idx, sma_period)
-        if not passes_sma:
-            skipped_sma += 1
-            last_entry_idx = idx
-            continue
+        if mode == "regime":
+            # Regime mode: above SMA = put_only, below SMA = call_only
+            if sma_value is None:
+                skipped_sma += 1
+                last_entry_idx = idx
+                continue
+            trade_mode = "put_only" if passes_sma else "call_only"
+        else:
+            # Standard modes: block if below SMA
+            if not passes_sma:
+                skipped_sma += 1
+                last_entry_idx = idx
+                continue
+            trade_mode = mode
 
         # Get VIX for this date
         vix = vix_history.get(entry_date)
@@ -871,6 +990,11 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
             root=root,
             commission_per_contract=commission_per_contract,
             slippage_per_share=slippage_per_share,
+            mode=trade_mode,
+            dte_target=dte_target,
+            dte_min=dte_min,
+            dte_max=dte_max,
+            dte_exit=dte_exit,
         )
 
         if result == "skip_sma":
@@ -935,9 +1059,13 @@ def print_results(trades: List[Dict],
     sample_offset = trades[0].get("call_delta_offset", 0.0)
     is_asymmetric = sample_offset != 0.0
 
+    trade_mode = trades[0].get("mode", "condor")
+    mode_label = {"condor": "IRON CONDOR", "put_only": "PUT CREDIT SPREAD",
+                  "call_only": "CALL CREDIT SPREAD"}.get(trade_mode, trade_mode.upper())
+
     print()
     print("=" * 70)
-    print("THETADATA IRON CONDOR RESULTS  --  SPY")
+    print(f"THETADATA {mode_label} RESULTS  --  SPY")
     if is_asymmetric:
         print(f"  Call Delta Offset: {sample_offset:+.2f} (asymmetric wings)")
     sma_val = trades[0].get("sma_value")
@@ -1109,8 +1237,16 @@ def print_results(trades: List[Dict],
                   f"call_delta={t.get('call_delta', t['short_delta'])}")
         else:
             print(f"    IV Rank:   {t['iv_rank']:.2f}  ({t['iv_tier']})  delta={t['short_delta']}")
-        print(f"    Strikes:   LP {t['long_put']}  SP {t['short_put']}  "
-              f"SC {t['short_call']}  LC {t['long_call']}")
+        strike_parts = []
+        if t.get('long_put') is not None:
+            strike_parts.append(f"LP {t['long_put']}")
+        if t.get('short_put') is not None:
+            strike_parts.append(f"SP {t['short_put']}")
+        if t.get('short_call') is not None:
+            strike_parts.append(f"SC {t['short_call']}")
+        if t.get('long_call') is not None:
+            strike_parts.append(f"LC {t['long_call']}")
+        print(f"    Strikes:   {'  '.join(strike_parts)}")
         print(f"    Credit:    ${t['credit']:.4f}/sh   Max loss: ${t['max_loss']:.2f}/ct")
         print(f"    Exp:       {t['expiration']}  DTE={t['dte']}")
         print(f"    Exit:      {t['exit_date']}  reason={t['exit_reason']}")
@@ -1131,7 +1267,7 @@ def export_csv(trades: List[Dict], filepath: str) -> None:
         "put_delta", "call_delta", "call_delta_offset",
         "long_put", "short_put", "short_call", "long_call",
         "credit", "max_loss", "pnl", "won", "exit_reason",
-        "side_breached", "put_width", "call_width", "data_source", "dte",
+        "side_breached", "put_width", "call_width", "data_source", "dte", "mode",
     ]
 
     with open(filepath, "w", newline="") as f:
@@ -1193,6 +1329,17 @@ def main():
     parser.add_argument("--call-delta-offset", type=float, default=0.0,
                         metavar="OFFSET",
                         help="Offset applied to call delta (e.g. -0.05). Default 0 = symmetric.")
+    parser.add_argument("--mode", type=str, default="condor",
+                        choices=["condor", "put_only", "call_only", "regime"],
+                        help="Trade mode: condor (4-leg), put_only (2-leg put spread), "
+                             "call_only (2-leg call spread), regime (puts above SMA, "
+                             "calls below SMA). Default: condor")
+    parser.add_argument("--dte-target", type=int, default=DTE_TARGET,
+                        metavar="DAYS",
+                        help=f"Target DTE for entry (default {DTE_TARGET})")
+    parser.add_argument("--dte-exit", type=int, default=DTE_EXIT,
+                        metavar="DAYS",
+                        help=f"Time-based exit at this DTE (default {DTE_EXIT})")
     parser.add_argument("--export-csv", type=str, default=None,
                         metavar="FILE",
                         help="Export trades to CSV file")
@@ -1223,6 +1370,11 @@ def main():
         take_profit_pct=args.take_profit_pct / 100.0,
         vix_abs_floor=args.vix_floor,
         root=args.ticker.upper(),
+        mode=args.mode,
+        dte_target=args.dte_target,
+        dte_exit=args.dte_exit,
+        dte_min=args.dte_target - 10,
+        dte_max=args.dte_target + 10,
     )
     trades, skipped_sma, skipped_iv, skipped_vix, skipped_data = result
     elapsed = time.time() - t0
