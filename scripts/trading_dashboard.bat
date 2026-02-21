@@ -18,16 +18,17 @@ echo    OPTIONS STRATEGIES
 echo    ------------------
 echo    1. SPY 80-Delta Call Monitor (check positions/P&L)
 echo    2. Put Credit Spread Scanner (find opportunities)
+echo    3. PCS Auto-Trader [IBKR Paper]
 echo.
 echo    ANALYST ESTIMATES
 echo    -----------------
-echo    3. Collect Daily Estimate Snapshot (LSEG)
-echo    4. Live Revision Momentum Analysis
-echo    5. Revision Momentum Backtest
+echo    4. Collect Daily Estimate Snapshot (LSEG)
+echo    5. Live Revision Momentum Analysis
+echo    6. Revision Momentum Backtest
 echo.
 echo    RUN ALL
 echo    -------
-echo    6. Morning Routine (Monitor + Scanner + Revisions)
+echo    7. Morning Routine (Monitor + PCS + Scanner + Revisions)
 echo.
 echo    0. Exit
 echo.
@@ -37,10 +38,11 @@ set /p choice="  Select option: "
 
 if "%choice%"=="1" goto spy_monitor
 if "%choice%"=="2" goto put_scanner
-if "%choice%"=="3" goto collect_estimates
-if "%choice%"=="4" goto live_revisions
-if "%choice%"=="5" goto backtest
-if "%choice%"=="6" goto morning_routine
+if "%choice%"=="3" goto pcs_autotrader
+if "%choice%"=="4" goto collect_estimates
+if "%choice%"=="5" goto live_revisions
+if "%choice%"=="6" goto backtest
+if "%choice%"=="7" goto morning_routine
 if "%choice%"=="0" goto end
 
 echo Invalid choice. Press any key to try again...
@@ -69,8 +71,53 @@ echo ============================================================
 echo NOTE: ThetaData Terminal must be running for IV Rank
 echo ============================================================
 echo.
-cd /d "C:\Users\Admin\OneDrive\Desktop\Investment Trading Programs\GitHub Repos\Put-Credit-Spreads"
+cd /d "C:\Users\Admin\Put-Credit-Spreads"
 python put_spread_scanner.py
+echo.
+pause
+goto menu
+
+:pcs_autotrader
+cls
+echo.
+echo ============================================================
+echo PCS AUTO-TRADER [IBKR Paper]
+echo ============================================================
+echo NOTE: TWS must be running with paper trading on port 7497
+echo ============================================================
+echo.
+echo   1. Full Cycle (monitor + scan SPY)
+echo   2. Monitor Only (check open positions)
+echo   3. Scheduler (continuous auto-trading)
+echo   4. Dry Run (check signals, no orders)
+echo   5. Status (show open positions)
+echo   6. Performance Dashboard
+echo   7. Trade History
+echo   0. Back to main menu
+echo.
+set /p pcs_choice="  Select option: "
+
+cd /d "C:\Users\Admin\Put-Credit-Spreads"
+
+if "%pcs_choice%"=="1" (
+    python ibkr_put_spread.py --paper
+) else if "%pcs_choice%"=="2" (
+    python ibkr_put_spread.py --monitor-only --paper
+) else if "%pcs_choice%"=="3" (
+    echo.
+    echo Starting scheduler mode (Ctrl+C to stop)...
+    python ibkr_put_spread.py --scheduler --paper --ticker SPY,QQQ
+) else if "%pcs_choice%"=="4" (
+    python ibkr_put_spread.py --dry-run --paper
+) else if "%pcs_choice%"=="5" (
+    python ibkr_put_spread.py --status
+) else if "%pcs_choice%"=="6" (
+    python ibkr_put_spread.py --performance --paper
+) else if "%pcs_choice%"=="7" (
+    python ibkr_put_spread.py --history
+) else if "%pcs_choice%"=="0" (
+    goto menu
+)
 echo.
 pause
 goto menu
@@ -138,26 +185,33 @@ echo.
 echo ============================================================
 echo MORNING TRADING ROUTINE
 echo ============================================================
-echo Running: SPY Monitor + Put Scanner + Live Revisions
+echo Running: SPY Monitor + PCS Monitor + Put Scanner + Revisions
 echo ============================================================
 echo.
 
 echo.
-echo [1/3] SPY 80-Delta Position Monitor
+echo [1/4] SPY 80-Delta Position Monitor
 echo ============================================================
 cd /d "C:\Users\Admin\OneDrive\Desktop\Investment Trading Programs\Claude Options Trading Project\Strategies\80-Delta Call Strategy"
 python monitor_positions.py
 
 echo.
 echo.
-echo [2/3] Put Credit Spread Scanner
+echo [2/4] PCS Position Monitor [IBKR Paper]
 echo ============================================================
-cd /d "C:\Users\Admin\OneDrive\Desktop\Investment Trading Programs\GitHub Repos\Put-Credit-Spreads"
+cd /d "C:\Users\Admin\Put-Credit-Spreads"
+python ibkr_put_spread.py --monitor-only --paper
+
+echo.
+echo.
+echo [3/4] Put Credit Spread Scanner
+echo ============================================================
+cd /d "C:\Users\Admin\Put-Credit-Spreads"
 python put_spread_scanner.py
 
 echo.
 echo.
-echo [3/3] Live Revision Momentum
+echo [4/4] Live Revision Momentum
 echo ============================================================
 cd /d "C:\Users\Admin\OneDrive\Desktop\Investment Trading Programs\GitHub Repos\Valuation-and-Predictive-Factors"
 python predictive/estimate_tracker.py --live --lookback 30
