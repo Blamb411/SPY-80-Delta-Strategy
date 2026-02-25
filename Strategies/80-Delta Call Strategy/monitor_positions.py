@@ -123,6 +123,17 @@ OPEN_POSITIONS = [
         entry_price=49.70,
         notes="Third trade - 76 delta, missed down day entry"
     ),
+    Position(
+        account="IRA",
+        entry_date="2026-02-19",
+        symbol="SPY",
+        strike=655,
+        expiration="2026-06-18",
+        right="C",
+        quantity=10,
+        entry_price=51.76,
+        notes="Fourth trade - 78 delta"
+    ),
 ]
 
 
