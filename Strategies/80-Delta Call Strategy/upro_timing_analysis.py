@@ -171,6 +171,139 @@ def run_upro_bh(upro_close):
 
 
 # ======================================================================
+# LEVERAGE COMPARISON: SPY B&H vs SYNTHETIC 3x vs UPRO
+# ======================================================================
+
+def run_spy_bh(spy_close, upro_start_date):
+    """Plain SPY buy-and-hold from UPRO inception date (unlevered baseline)."""
+    spy = spy_close.loc[spy_close.index >= upro_start_date]
+    prices = spy.values
+    shares = INITIAL_CAPITAL / prices[0]
+    portfolio_values = shares * prices
+    dates = spy.index
+
+    m = compute_metrics(
+        portfolio_values, name="SPY B&H (1x)",
+        num_trades=1, days_invested=len(prices), total_days=len(prices),
+    )
+    return dates, portfolio_values, m
+
+
+def run_synthetic_3x(spy_close, upro_start_date, annual_margin_rate=0.0):
+    """Synthetic 3x daily-rebalanced SPY (like UPRO but without expense ratio).
+
+    Daily return = 3 * SPY_daily_return - daily_borrowing_cost
+    Borrowing cost applies to the 2x borrowed portion.
+    Set annual_margin_rate=0 for frictionless 3x, or ~0.06 for realistic margin.
+    """
+    spy = spy_close.loc[spy_close.index >= upro_start_date]
+    prices = spy.values
+    daily_rets = np.diff(prices) / prices[:-1]
+
+    # Daily borrowing cost on the 2x borrowed portion
+    daily_borrow = (annual_margin_rate * 2.0) / TRADING_DAYS_PER_YEAR
+
+    portfolio_values = np.zeros(len(prices))
+    portfolio_values[0] = INITIAL_CAPITAL
+
+    for i in range(1, len(prices)):
+        lev_return = 3.0 * daily_rets[i - 1] - daily_borrow
+        portfolio_values[i] = portfolio_values[i - 1] * (1 + lev_return)
+        # Floor at zero (margin call wipes you out)
+        if portfolio_values[i] <= 0:
+            portfolio_values[i:] = 0
+            break
+
+    dates = spy.index
+
+    cost_label = "no cost" if annual_margin_rate == 0 else f"{annual_margin_rate:.0%} margin"
+    name = f"Synthetic 3x ({cost_label})"
+
+    m = compute_metrics(
+        portfolio_values, name=name,
+        num_trades=1, days_invested=len(prices), total_days=len(prices),
+    )
+    return dates, portfolio_values, m
+
+
+def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
+                  maintenance_margin=0.25):
+    """Static 3x leveraged SPY: $100K equity + $200K borrowed, buy & hold.
+
+    Unlike UPRO or synthetic daily-rebalanced 3x, leverage is NOT reset daily.
+    You buy $300K of SPY on day 1 and hold.  Leverage ratio drifts with price:
+    it rises as SPY falls (making crashes worse) and falls as SPY rises.
+
+    Margin call triggered when:
+        equity < maintenance_margin * position_value
+    where equity = position_value - debt.
+
+    After a margin call the position is liquidated and the simulation
+    continues flat at the remaining equity (which may be zero or negative,
+    floored at zero).
+
+    Parameters
+    ----------
+    annual_margin_rate : float
+        Annual interest rate on the $200K borrowed portion (default 6%).
+    maintenance_margin : float
+        Reg-T maintenance margin requirement (default 25%).
+    """
+    spy = spy_close.loc[spy_close.index >= upro_start_date]
+    prices = spy.values
+    dates = spy.index
+
+    initial_equity = INITIAL_CAPITAL          # $100K
+    debt = initial_equity * 2.0               # $200K borrowed
+    shares = (initial_equity + debt) / prices[0]  # buy $300K of SPY
+
+    daily_interest = annual_margin_rate / TRADING_DAYS_PER_YEAR
+
+    portfolio_values = np.zeros(len(prices))
+    portfolio_values[0] = initial_equity
+    margin_called = False
+    margin_call_day = None
+
+    for i in range(1, len(prices)):
+        if margin_called:
+            # Already liquidated — flat at whatever equity remained
+            portfolio_values[i] = portfolio_values[i - 1]
+            continue
+
+        # Accrue daily interest on the debt
+        debt *= (1.0 + daily_interest)
+
+        # Current position and equity
+        position_value = shares * prices[i]
+        equity = position_value - debt
+
+        # Check margin call
+        if equity <= 0 or equity < maintenance_margin * position_value:
+            # Forced liquidation: sell everything, repay debt
+            remaining = max(0.0, position_value - debt)
+            portfolio_values[i] = remaining
+            margin_called = True
+            margin_call_day = i
+        else:
+            portfolio_values[i] = equity
+
+    name = f"Static 3x ({annual_margin_rate:.0%} margin)"
+    m = compute_metrics(
+        portfolio_values, name=name,
+        num_trades=1, days_invested=len(prices), total_days=len(prices),
+    )
+    # Attach margin-call info as extra fields
+    if margin_called:
+        m["margin_call_day"] = int(margin_call_day)
+        m["margin_call_date"] = str(dates[margin_call_day].date())
+        m["days_to_margin_call"] = int(margin_call_day)
+    else:
+        m["margin_call_day"] = None
+
+    return dates, portfolio_values, m
+
+
+# ======================================================================
 # STRATEGY 1: VIX-BASED REGIME FILTER
 # ======================================================================
 
@@ -783,6 +916,35 @@ def main():
     all_results = []
     all_curves = {}       # name -> (dates, values)
     best_per_strategy = []  # (label, dates, values, metrics) for best variant per strategy
+
+    # ==================================================================
+    # LEVERAGE COMPARISON: SPY B&H vs Synthetic 3x vs UPRO
+    # ==================================================================
+    print("\n" + "=" * 80)
+    print("  LEVERAGE COMPARISON: SPY vs Synthetic 3x vs UPRO")
+    print("=" * 80)
+
+    spy_dates, spy_values, spy_metrics = run_spy_bh(spy_close, upro_close.index[0])
+    s3_dates, s3_values, s3_metrics = run_synthetic_3x(spy_close, upro_close.index[0], annual_margin_rate=0.0)
+    s3m_dates, s3m_values, s3m_metrics = run_synthetic_3x(spy_close, upro_close.index[0], annual_margin_rate=0.06)
+    stat_dates, stat_values, stat_metrics = run_static_3x(spy_close, upro_close.index[0], annual_margin_rate=0.06)
+
+    lev_results = [spy_metrics, s3_metrics, s3m_metrics, stat_metrics, bm_metrics]
+    print_strategy_table("LEVERAGE COMPARISON", lev_results)
+
+    # Report margin call info for static 3x
+    if stat_metrics.get("margin_call_day") is not None:
+        print(f"\n  ** Static 3x MARGIN CALL on {stat_metrics['margin_call_date']} "
+              f"(day {stat_metrics['days_to_margin_call']}) **")
+
+    # Add to curves for charting
+    all_curves[spy_metrics["name"]] = (spy_dates, spy_values)
+    all_curves[s3_metrics["name"]] = (s3_dates, s3_values)
+    all_curves[s3m_metrics["name"]] = (s3m_dates, s3m_values)
+    all_curves[stat_metrics["name"]] = (stat_dates, stat_values)
+
+    # Store leverage comparison metrics for final output
+    leverage_comparison = [spy_metrics, s3_metrics, s3m_metrics, stat_metrics, bm_metrics]
 
     # ==================================================================
     # STRATEGY 1: VIX-BASED REGIME FILTER

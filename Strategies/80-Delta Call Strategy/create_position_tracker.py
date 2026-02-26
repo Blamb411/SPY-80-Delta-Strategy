@@ -249,7 +249,7 @@ def build_80delta_sheet(ws, spy_price, today):
     row = 2
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=22)
     cell = ws.cell(row=row, column=1,
-                   value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  SPY: ${spy_price:.2f}")
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  SPY: ${spy_price:.2f}")
     cell.font = Font(name="Calibri", size=10, italic=True, color="1F4E79")
     cell.alignment = Alignment(horizontal="center")
 
@@ -562,7 +562,7 @@ def build_pcs_sheet(ws, spy_price, today):
     row = 2
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=29)
     cell = ws.cell(row=row, column=1,
-                   value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  "
                          f"SPY: ${spy_price:.2f}  |  QQQ: ${qqq_price:.2f}  |  "
                          f"PAPER TRADING - NOT REAL MONEY")
     cell.font = Font(name="Calibri", size=10, italic=True, bold=True, color="4A2545")
@@ -582,6 +582,7 @@ def build_pcs_sheet(ws, spy_price, today):
         ("  Wing Width", "0.75 sigma (volatility-scaled)"),
         ("  DTE", "30 days target (25-45 range)"),
         ("  IV Rank Floor", "15% minimum to enter"),
+        ("  Min C/W Ratio", "20% for QQQ, 12% for SPY (credit / wing width)"),
         ("  Trend Filter", "Price > 200-day SMA"),
         ("  Entry Spacing", "5 days minimum between entries"),
         ("  Max Open", "3 positions per ticker"),
