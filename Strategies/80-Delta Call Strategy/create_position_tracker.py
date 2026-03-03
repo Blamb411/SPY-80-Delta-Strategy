@@ -148,18 +148,18 @@ def max_hold_date(entry_str, max_days=60):
 # GET LIVE DATA
 # ============================================================================
 
-def get_spy_price():
+def get_price(symbol, fallback=600.0):
     try:
-        ticker = yf.Ticker("SPY")
+        ticker = yf.Ticker(symbol)
         data = ticker.history(period="5d")
         if not data.empty:
             price = float(data["Close"].iloc[-1])
-            print(f"SPY price from yfinance: ${price:.2f}")
+            print(f"{symbol} price from yfinance: ${price:.2f}")
             return price
     except Exception as e:
-        print(f"yfinance error: {e}")
-    print("Using fallback SPY price: $600.00")
-    return 600.0
+        print(f"yfinance error for {symbol}: {e}")
+    print(f"Using fallback {symbol} price: ${fallback:.2f}")
+    return fallback
 
 
 # ============================================================================
@@ -232,24 +232,27 @@ def load_pcs_trades():
 # SHEET 1: 80-DELTA CALLS
 # ============================================================================
 
-def build_80delta_sheet(ws, spy_price, today):
+def build_80delta_sheet(ws, price_map, today):
     s = get_styles()
+    spy_price = price_map.get("SPY", 600.0)
+    qqq_price = price_map.get("QQQ", 500.0)
 
     # ========================================================================
     # TITLE ROW
     # ========================================================================
     row = 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=22)
-    cell = ws.cell(row=row, column=1, value="SPY 80-Delta Call Strategy -- Position Tracker")
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=25)
+    cell = ws.cell(row=row, column=1, value="80-Delta Call Strategy -- Position Tracker")
     cell.font = s["title_font"]
     cell.fill = s["title_fill"]
     cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[row].height = 30
 
     row = 2
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=22)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=25)
+    price_str = "  |  ".join(f"{sym}: ${p:.2f}" for sym, p in price_map.items())
     cell = ws.cell(row=row, column=1,
-                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  SPY: ${spy_price:.2f}")
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  {price_str}")
     cell.font = Font(name="Calibri", size=10, italic=True, color="1F4E79")
     cell.alignment = Alignment(horizontal="center")
 
@@ -327,14 +330,16 @@ def build_80delta_sheet(ws, spy_price, today):
 
     for t in TRADES:
         row += 1
+        sym = t["symbol"]
+        spot = price_map.get(sym, spy_price)
         exp_date = datetime.strptime(t["expiration"], "%Y-%m-%d").date()
         dte = (exp_date - today).days
-        current_price = bs_call_price(spy_price, t["strike"], dte)
+        current_price = bs_call_price(spot, t["strike"], dte)
         current_value = current_price * 100 * t["quantity"]
         entry_cost = t["entry_price"] * 100 * t["quantity"]
         pnl_dollar = current_value - entry_cost
         pnl_pct = (current_price / t["entry_price"] - 1) if t["entry_price"] > 0 else 0
-        cur_delta = bs_delta(spy_price, t["strike"], dte)
+        cur_delta = bs_delta(spot, t["strike"], dte)
         position_delta = cur_delta * t["quantity"] * 100
         profit_target = t["entry_price"] * 1.50
         pct_to_target = (profit_target - current_price) / current_price if current_price > 0 else 0
@@ -451,6 +456,79 @@ def build_80delta_sheet(ws, spy_price, today):
 
         row += 1
 
+    # ========================================================================
+    # RECOMMENDED NEXT TRADES
+    # ========================================================================
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    cell = ws.cell(row=row, column=1, value="Recommended Next Trades")
+    cell.font = s["section_font"]
+    row += 1
+
+    rec_headers = ["Symbol", "Strike", "Expiration", "DTE", "Est Delta",
+                   "Est Price", "Cost (10 ct)", "Cost (5 ct)"]
+    for col_idx, h in enumerate(rec_headers, 1):
+        cell = ws.cell(row=row, column=col_idx, value=h)
+        cell.font = s["header_font"]
+        cell.fill = s["header_fill"]
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = s["thin_border"]
+
+    for sym in ["SPY", "QQQ"]:
+        row += 1
+        spot = price_map.get(sym, 600.0)
+        vix_iv = (get_current_vix() or 20.0) / 100.0
+
+        # Find ~120 DTE monthly expiration (3rd Friday)
+        from datetime import timedelta as _td
+        target_dte = 120
+        candidates = []
+        for month_offset in range(3, 7):
+            m = (today.month + month_offset - 1) % 12 + 1
+            y = today.year + (today.month + month_offset - 1) // 12
+            first = date(y, m, 1)
+            dow = first.weekday()
+            first_fri = first + _td(days=(4 - dow) % 7)
+            third_fri = first_fri + _td(days=14)
+            exp_dte = (third_fri - today).days
+            if 90 <= exp_dte <= 150:
+                candidates.append((abs(exp_dte - target_dte), third_fri, exp_dte))
+        if not candidates:
+            continue
+        candidates.sort()
+        best_exp, best_dte = candidates[0][1], candidates[0][2]
+
+        # Find strike for 0.80 delta via bisection
+        lo, hi = spot * 0.7, spot * 1.1
+        t_years = best_dte / 365.0
+        for _ in range(100):
+            mid = (lo + hi) / 2
+            d = bs_delta(spot, mid, best_dte, iv=vix_iv)
+            if d > 0.80:
+                lo = mid
+            else:
+                hi = mid
+        rec_strike = round(mid)
+        rec_delta = bs_delta(spot, rec_strike, best_dte, iv=vix_iv)
+        rec_price = bs_call_price(spot, rec_strike, best_dte, iv=vix_iv)
+
+        values = [
+            sym, rec_strike, best_exp.strftime("%Y-%m-%d"), best_dte,
+            rec_delta, rec_price,
+            rec_price * 100 * 10, rec_price * 100 * 5,
+        ]
+        for col_idx, val in enumerate(values, 1):
+            cell = ws.cell(row=row, column=col_idx, value=val)
+            cell.font = s["data_font"]
+            cell.border = s["thin_border"]
+            cell.alignment = Alignment(horizontal="center")
+
+        ws.cell(row=row, column=2).number_format = s["money_whole_fmt"]
+        ws.cell(row=row, column=5).number_format = s["delta_fmt"]
+        ws.cell(row=row, column=6).number_format = s["money_fmt"]
+        ws.cell(row=row, column=7).number_format = s["money_whole_fmt"]
+        ws.cell(row=row, column=8).number_format = s["money_whole_fmt"]
+
     # Column widths
     col_widths = {
         1: 8, 2: 12, 3: 7, 4: 9, 5: 12, 6: 6, 7: 5,
@@ -520,26 +598,16 @@ def build_pcs_sheet(ws, spy_price, today):
     positions, latest_logs = load_pcs_trades()
 
     # Get QQQ price
-    qqq_price = None
-    try:
-        ticker = yf.Ticker("QQQ")
-        data = ticker.history(period="5d")
-        if not data.empty:
-            qqq_price = float(data["Close"].iloc[-1])
-            print(f"QQQ price from yfinance: ${qqq_price:.2f}")
-    except Exception:
-        pass
-    if not qqq_price:
-        qqq_price = 600.0
-        print("Using fallback QQQ price: $600.00")
+    qqq_price = get_price("QQQ", 500.0)
 
-    spot_map = {"SPY": spy_price, "QQQ": qqq_price}
+    iwm_price = get_price("IWM", 250.0)
+    spot_map = {"SPY": spy_price, "QQQ": qqq_price, "IWM": iwm_price}
 
     # Current market data for the "Current" columns
     cur_vix = get_current_vix()
     cur_ivr = compute_iv_rank(cur_vix) if cur_vix else None
     sma200_map = {}
-    for sym in ["SPY", "QQQ"]:
+    for sym in ["SPY", "QQQ", "IWM"]:
         sma = compute_sma200(sym)
         if sma:
             sma200_map[sym] = sma
@@ -858,14 +926,16 @@ def build_pcs_sheet(ws, spy_price, today):
 
 def build_spreadsheet(output_path):
     today = date.today()
-    spy_price = get_spy_price()
+    spy_price = get_price("SPY", 600.0)
+    qqq_price = get_price("QQQ", 500.0)
+    price_map = {"SPY": spy_price, "QQQ": qqq_price}
 
     wb = openpyxl.Workbook()
 
     # Sheet 1: 80-Delta Calls
     ws1 = wb.active
     ws1.title = "80-Delta Calls"
-    delta_results = build_80delta_sheet(ws1, spy_price, today)
+    delta_results = build_80delta_sheet(ws1, price_map, today)
 
     # Sheet 2: PCS Paper Trades
     ws2 = wb.create_sheet("PCS Paper Trades")
