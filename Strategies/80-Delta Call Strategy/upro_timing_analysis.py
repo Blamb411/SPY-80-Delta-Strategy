@@ -10,7 +10,7 @@ Strategies:
   4. Drawdown-Triggered Exit
   5. Composite Signal (SMA200 + VIX + Momentum)
 
-Period: UPRO inception (2009-06-25) through 2026-01-31
+Period: UPRO inception (2009-06-25) through 2026-03-02
 Initial capital: $100,000
 
 Usage:
@@ -39,7 +39,7 @@ _this_dir = os.path.dirname(os.path.abspath(__file__))
 
 INITIAL_CAPITAL = 100_000
 UPRO_INCEPTION = "2009-06-25"
-END_DATE = "2026-01-31"
+END_DATE = "2026-03-03"
 # Start SPY/VIX data earlier for SMA200 warm-up
 DATA_START = "2008-01-01"
 TRADING_DAYS_PER_YEAR = 252
