@@ -8,7 +8,7 @@ Pulls live prices from yfinance, PCS trades from put_spread_paper.db.
 
 import math
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import numpy as np
 import yfinance as yf
 import openpyxl
@@ -166,10 +166,46 @@ def max_hold_date(entry_str, max_days=60):
     d = datetime.strptime(entry_str, "%Y-%m-%d").date()
     count = 0
     while count < max_days:
-        d += __import__("datetime").timedelta(days=1)
+        d += timedelta(days=1)
         if np.is_busday(np.datetime64(d.isoformat())):
             count += 1
     return d
+
+
+def get_historical_closes(symbols, start_str, end_date):
+    """Fetch daily close prices from yfinance for a date range.
+
+    Returns {symbol: {date: price}} dict.
+    """
+    hist_prices = {}
+    start_dt = datetime.strptime(start_str, "%Y-%m-%d").date()
+    # Fetch a few extra days before start to handle weekends/holidays
+    fetch_start = (start_dt - timedelta(days=10)).strftime("%Y-%m-%d")
+    fetch_end = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    for sym in symbols:
+        hist_prices[sym] = {}
+        try:
+            tk = yf.Ticker(sym)
+            df = tk.history(start=fetch_start, end=fetch_end)
+            for idx, row in df.iterrows():
+                d = idx.date() if hasattr(idx, 'date') else idx
+                hist_prices[sym][d] = float(row["Close"])
+        except Exception as e:
+            print(f"Warning: could not fetch history for {sym}: {e}")
+    return hist_prices
+
+
+def lookup_hist_price(hist_prices, symbol, target_date):
+    """Look up close price on or before target_date (handles weekends/holidays)."""
+    prices = hist_prices.get(symbol, {})
+    if target_date in prices:
+        return prices[target_date]
+    # Walk backwards up to 10 days to find most recent prior close
+    for i in range(1, 11):
+        d = target_date - timedelta(days=i)
+        if d in prices:
+            return prices[d]
+    return None
 
 
 # ============================================================================
@@ -266,10 +302,45 @@ def build_80delta_sheet(ws, price_map, today):
     qqq_price = price_map.get("QQQ", 500.0)
 
     # ========================================================================
+    # PRECOMPUTE CUMULATIVE CAPITAL & MARKET VALUE PER ROW
+    # ========================================================================
+    all_symbols = list({t["symbol"] for t in TRADES})
+    entry_dates = [t["entry_date"] for t in TRADES]
+    earliest = min(entry_dates)
+    hist_prices = get_historical_closes(all_symbols, earliest, today)
+
+    # Sort trades by entry date for cumulative computation
+    sorted_trades = sorted(TRADES, key=lambda x: x["entry_date"])
+    for i, t in enumerate(sorted_trades):
+        entry_dt = datetime.strptime(t["entry_date"], "%Y-%m-%d").date()
+        # Cumulative capital: sum of entry costs for all trades entered on or before this row's date
+        cum_capital = 0
+        for prev in sorted_trades[:i + 1]:
+            cum_capital += prev["entry_price"] * 100 * prev["quantity"]
+        t["_cum_capital"] = cum_capital
+
+        # Market value: sum of BS call values for all outstanding trades as of this row's date
+        cum_mkt = 0
+        for prev in sorted_trades[:i + 1]:
+            prev_exp = datetime.strptime(prev["expiration"], "%Y-%m-%d").date()
+            prev_dte = (prev_exp - entry_dt).days
+            sym = prev["symbol"]
+            if entry_dt >= today:
+                # Use current live price for today's rows
+                spot = price_map.get(sym, spy_price)
+            else:
+                spot = lookup_hist_price(hist_prices, sym, entry_dt)
+                if spot is None:
+                    spot = price_map.get(sym, spy_price)
+            val = bs_call_price(spot, prev["strike"], prev_dte) * 100 * prev["quantity"]
+            cum_mkt += val
+        t["_cum_mkt_value"] = cum_mkt
+
+    # ========================================================================
     # TITLE ROW
     # ========================================================================
     row = 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=25)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=27)
     cell = ws.cell(row=row, column=1, value="80-Delta Call Strategy -- Position Tracker")
     cell.font = s["title_font"]
     cell.fill = s["title_fill"]
@@ -277,7 +348,7 @@ def build_80delta_sheet(ws, price_map, today):
     ws.row_dimensions[row].height = 30
 
     row = 2
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=25)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=27)
     price_str = "  |  ".join(f"{sym}: ${p:.2f}" for sym, p in price_map.items())
     cell = ws.cell(row=row, column=1,
                    value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  {price_str}")
@@ -325,7 +396,7 @@ def build_80delta_sheet(ws, price_map, today):
     # MAIN POSITION TABLE
     # ========================================================================
     row += 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=22)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=24)
     cell = ws.cell(row=row, column=1, value="Open Positions")
     cell.font = s["section_font"]
     row += 1
@@ -333,6 +404,7 @@ def build_80delta_sheet(ws, price_map, today):
     headers = [
         "Trade #", "Entry Date", "Symbol", "Strike", "Expiration", "Type", "Qty",
         "Entry Price", "Total Cost",
+        "Capital Invested", "Market Value",
         "Delta@Entry", "DTE@Entry", "SPY@Entry", "SMA200@Entry",
         "Current Price", "Current Value",
         "Cur Delta", "Cur DTE",
@@ -391,6 +463,7 @@ def build_80delta_sheet(ws, price_map, today):
             t["trade_num"], t["entry_date"], t["symbol"], t["strike"],
             t["expiration"], t["type"], t["quantity"],
             t["entry_price"], entry_cost,
+            t["_cum_capital"], t["_cum_mkt_value"],
             t["delta_at_entry"], t["dte_at_entry"], t["spy_at_entry"],
             t["sma200_at_entry"],
             current_price, current_value, cur_delta, dte,
@@ -404,21 +477,21 @@ def build_80delta_sheet(ws, price_map, today):
             cell.border = s["thin_border"]
             cell.alignment = Alignment(horizontal="center")
 
-        for c in [8, 14, 20]:
+        for c in [8, 16, 22]:
             ws.cell(row=row, column=c).number_format = s["money_fmt"]
-        for c in [9, 15, 18]:
+        for c in [9, 10, 11, 17, 20]:
             ws.cell(row=row, column=c).number_format = s["money_whole_fmt"]
-        for c in [10, 16]:
+        for c in [12, 18]:
             ws.cell(row=row, column=c).number_format = s["delta_fmt"]
-        for c in [19, 21]:
+        for c in [21, 23]:
             ws.cell(row=row, column=c).number_format = s["pct_fmt"]
-        for c in [1, 7, 11, 17, 22, 24]:
+        for c in [1, 7, 13, 19, 24, 26]:
             ws.cell(row=row, column=c).number_format = s["int_fmt"]
-        for c in [4, 12, 13]:
+        for c in [4, 14, 15]:
             ws.cell(row=row, column=c).number_format = s["money_whole_fmt"]
 
-        pnl_cell = ws.cell(row=row, column=18)
-        pnl_pct_cell = ws.cell(row=row, column=19)
+        pnl_cell = ws.cell(row=row, column=20)
+        pnl_pct_cell = ws.cell(row=row, column=21)
         if pnl_dollar >= 0:
             pnl_cell.fill = s["green_fill"]
             pnl_pct_cell.fill = s["green_fill"]
@@ -426,7 +499,7 @@ def build_80delta_sheet(ws, price_map, today):
             pnl_cell.fill = s["red_fill"]
             pnl_pct_cell.fill = s["red_fill"]
 
-        status_cell = ws.cell(row=row, column=25)
+        status_cell = ws.cell(row=row, column=27)
         if "SELL" in status:
             status_cell.fill = s["orange_fill"]
             status_cell.font = Font(name="Calibri", size=10, bold=True)
@@ -508,7 +581,6 @@ def build_80delta_sheet(ws, price_map, today):
         vix_iv = (get_current_vix() or 20.0) / 100.0
 
         # Find ~120 DTE monthly expiration (3rd Friday)
-        from datetime import timedelta as _td
         target_dte = 120
         candidates = []
         for month_offset in range(3, 7):
@@ -516,8 +588,8 @@ def build_80delta_sheet(ws, price_map, today):
             y = today.year + (today.month + month_offset - 1) // 12
             first = date(y, m, 1)
             dow = first.weekday()
-            first_fri = first + _td(days=(4 - dow) % 7)
-            third_fri = first_fri + _td(days=14)
+            first_fri = first + timedelta(days=(4 - dow) % 7)
+            third_fri = first_fri + timedelta(days=14)
             exp_dte = (third_fri - today).days
             if 90 <= exp_dte <= 150:
                 candidates.append((abs(exp_dte - target_dte), third_fri, exp_dte))
@@ -560,10 +632,11 @@ def build_80delta_sheet(ws, price_map, today):
     # Column widths
     col_widths = {
         1: 8, 2: 12, 3: 7, 4: 9, 5: 12, 6: 6, 7: 5,
-        8: 12, 9: 13, 10: 11, 11: 11, 12: 11, 13: 13,
-        14: 13, 15: 14, 16: 10, 17: 9,
-        18: 14, 19: 13, 20: 12, 21: 11,
-        22: 10, 23: 13, 24: 14, 25: 18,
+        8: 12, 9: 13, 10: 15, 11: 14,
+        12: 11, 13: 11, 14: 11, 15: 13,
+        16: 13, 17: 14, 18: 10, 19: 9,
+        20: 14, 21: 13, 22: 12, 23: 11,
+        24: 10, 25: 13, 26: 14, 27: 18,
     }
     for col, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col)].width = width
