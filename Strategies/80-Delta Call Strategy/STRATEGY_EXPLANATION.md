@@ -959,6 +959,20 @@ To understand *how* these strategies behave differently, we bucketed all 201 mon
 
 The DD25/Cool40 advantage is clearest in bear months: it loses 3.9% less per month than UPRO B&H on average, compounding to massive outperformance over multiple bear months. The 80-delta options approach is even more defensive in bear markets (-5.6% vs -12.3%) but gives up more upside in bull markets (+5.2% vs +10.5%).
 
+### Anomalies and Non-Monotonic Patterns
+
+The bucket-by-bucket data reveals several non-monotonic patterns that aren't bugs — they're genuine features of how each strategy interacts with different market environments.
+
+**1. UPRO B&H leverage spikes to 4.62x near zero (-1% to 0%).** When SPY's monthly return is slightly negative, the ratio of UPRO's return to SPY's return exceeds 3x because of volatility drag. Small negative daily SPY returns compound to a slightly negative monthly figure, but UPRO's daily 3x rebalancing creates path-dependent losses that overshoot 3x the monthly return. This is volatility drag made visible — the same effect that causes UPRO to underperform a hypothetical frictionless 3x position over time.
+
+**2. DD25 is *worse* than UPRO B&H at -5% to -4% (the mid-month exit trap).** DD25 loses -16.5% in this bucket vs UPRO B&H's -14.1%. The mechanism: the -25% drawdown threshold triggers mid-month, locking in the UPRO loss and moving to cash. SPY then partially recovers before month-end, but DD25 has already exited and misses the bounce. The monthly return captures "sold the dip + missed the bounce" in a single number. This doesn't damage the long-term strategy (the exit prevents further losses in months where recovery doesn't come), but it creates a counterintuitive single-bucket anomaly.
+
+**3. DD25 at < -8% is *better* than at -8% to -7% (inverse severity).** DD25 loses only -13.0% (1.25x leverage) in the < -8% bucket vs -13.9% (1.89x) in the -8% to -7% bucket. The worst SPY months (< -8%) include catastrophic events like March 2020 where the DD25 exit likely fired early in the month — the portfolio was already in cash during the deepest part of the plunge. The moderately bad -8% to -7% months may not have pushed UPRO past the -25% ATH threshold, so DD25 was fully exposed for the entire month.
+
+**4. 80D options compress above +7% SPY (profit target cap).** At SPY +7% to +8%, the options return is only +3.9% (0.52x leverage); at SPY >= +8%, it drops to +3.2% (0.27x). The +50% profit target and 60-day max-hold exits close winning positions before the full monthly move plays out. In extreme rally months, individual options hit the profit target early and get sold. Additionally, sharp V-bottom recoveries often start below the SMA200, meaning the options portfolio wasn't fully deployed at the beginning of the move.
+
+**5. DD25 fully matches UPRO B&H at -7% to -6%.** Both show -18.9%. These months produced a SPY decline that inflicted losses on UPRO but never pushed it past the -25% ATH threshold. The exit simply never fired, so DD25 took the exact same hit as B&H. This is expected behavior — the strategy only provides protection beyond the -25% threshold.
+
 ---
 
 ## Risks and Limitations

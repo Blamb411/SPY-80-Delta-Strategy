@@ -15,6 +15,9 @@ import sys
 import math
 from datetime import datetime, timedelta
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -215,6 +218,140 @@ def print_regime_summary(merged, strategy_names, output):
 
 
 # ======================================================================
+# CHART GENERATION
+# ======================================================================
+
+_ARTICLE_CHART_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_this_dir)))),
+    "articles", "upro-timing", "charts"
+)
+
+COLORS = {
+    "spy": "#555555",
+    "upro_bh": "#1f77b4",
+    "upro_dd25": "#9467bd",
+    "opts_80d": "#2ca02c",
+}
+
+STRATEGY_LABELS = ["SPY", "UPRO B&H", "UPRO DD25", "80D Opts"]
+STRATEGY_COLORS = [COLORS["spy"], COLORS["upro_bh"], COLORS["upro_dd25"], COLORS["opts_80d"]]
+
+
+def _save_chart(fig, filename):
+    """Save chart to both local dir and article charts dir."""
+    for d in [_this_dir, _ARTICLE_CHART_DIR]:
+        path = os.path.join(d, filename)
+        os.makedirs(d, exist_ok=True)
+        fig.savefig(path, dpi=200, bbox_inches="tight")
+        print(f"  Saved: {path}")
+    plt.close(fig)
+
+
+def generate_stratification_chart(bin_data):
+    """Chart 1: Grouped bar chart of average monthly returns by SPY bucket."""
+    labels = [r["label"] for r in bin_data]
+    x = np.arange(len(labels))
+    width = 0.2
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for i, (name, color) in enumerate(zip(STRATEGY_LABELS, STRATEGY_COLORS)):
+        vals = [r.get(name, r.get("SPY", 0)) * 100 if name != "SPY" else r["SPY"] * 100
+                for r in bin_data]
+        # For SPY, values are in the dict as "SPY"
+        if name == "SPY":
+            vals = [r["SPY"] * 100 for r in bin_data]
+        ax.bar(x + (i - 1.5) * width, vals, width, label=name, color=color, alpha=0.85)
+
+    ax.set_xlabel("SPY Monthly Return Bucket")
+    ax.set_ylabel("Average Monthly Return (%)")
+    ax.set_title("Monthly Return Stratification by SPY Return Bucket (2009-2026)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.legend(loc="upper left")
+    ax.axhline(y=0, color="black", linewidth=0.5)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save_chart(fig, "10_stratification_returns.png")
+
+
+def generate_leverage_chart(bin_data, strategy_names):
+    """Chart 2: Line chart of leverage ratios with 3x reference line."""
+    # Filter out near-zero buckets
+    filtered = [r for r in bin_data if abs(r["SPY"]) >= 0.001]
+    labels = [r["label"] for r in filtered]
+    x = np.arange(len(labels))
+
+    line_names = strategy_names  # UPRO B&H, UPRO DD25, 80D Opts
+    line_colors = [COLORS["upro_bh"], COLORS["upro_dd25"], COLORS["opts_80d"]]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    for name, color in zip(line_names, line_colors):
+        ratios = []
+        for r in filtered:
+            val = r.get(name, np.nan)
+            spy = r["SPY"]
+            if not np.isnan(val) and abs(spy) > 0.001:
+                ratios.append(val / spy)
+            else:
+                ratios.append(np.nan)
+        ax.plot(x, ratios, marker="o", markersize=5, label=name, color=color, linewidth=2)
+
+    ax.axhline(y=3.0, color="red", linewidth=1.5, linestyle="--", alpha=0.7, label="3.0x (UPRO theoretical)")
+    ax.axhline(y=1.0, color="gray", linewidth=0.8, linestyle=":", alpha=0.5)
+    ax.set_xlabel("SPY Monthly Return Bucket")
+    ax.set_ylabel("Leverage Ratio (Strategy / SPY)")
+    ax.set_title("Effective Leverage Ratios by SPY Return Bucket (2009-2026)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.legend(loc="upper right")
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save_chart(fig, "11_leverage_ratios.png")
+
+
+def generate_regime_chart(merged, strategy_names):
+    """Chart 3: Grouped bar chart for Bear/Flat/Bull regimes."""
+    regimes = [
+        ("Bear\n(SPY < -2%)", merged["SPY"] < -0.02),
+        ("Flat\n(-2% to +2%)", (merged["SPY"] >= -0.02) & (merged["SPY"] < 0.02)),
+        ("Bull\n(SPY >= +2%)", merged["SPY"] >= 0.02),
+    ]
+
+    all_names = ["SPY"] + strategy_names
+    all_colors = STRATEGY_COLORS
+
+    regime_labels = []
+    regime_data = {n: [] for n in all_names}
+
+    for regime_name, mask in regimes:
+        subset = merged[mask]
+        regime_labels.append(regime_name)
+        regime_data["SPY"].append(subset["SPY"].mean() * 100)
+        for name in strategy_names:
+            valid = subset[name].dropna()
+            regime_data[name].append(valid.mean() * 100 if len(valid) > 0 else 0)
+
+    x = np.arange(len(regime_labels))
+    width = 0.18
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i, (name, color) in enumerate(zip(all_names, all_colors)):
+        vals = regime_data[name]
+        ax.bar(x + (i - 1.5) * width, vals, width, label=name, color=color, alpha=0.85)
+
+    ax.set_xlabel("Market Regime")
+    ax.set_ylabel("Average Monthly Return (%)")
+    ax.set_title("Strategy Performance by Market Regime (2009-2026)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(regime_labels, fontsize=11)
+    ax.legend()
+    ax.axhline(y=0, color="black", linewidth=0.5)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save_chart(fig, "12_regime_summary.png")
+
+
+# ======================================================================
 # MAIN
 # ======================================================================
 
@@ -333,6 +470,15 @@ def main():
     for name, m in [("SPY B&H", spy_m), ("UPRO B&H", upro_bh_m),
                      ("UPRO DD25/Cool40", upro_dd_m), ("Syn 80D Opts", opts_m)]:
         log(f"  {name:<22} CAGR: {m['cagr']:+.1%}  Sharpe: {m['sharpe']:.2f}  MaxDD: {m['max_dd']:+.1%}")
+
+    # ---- Generate charts ----
+    log(f"\n{'=' * W}")
+    log("GENERATING CHARTS")
+    log(f"{'=' * W}")
+    generate_stratification_chart(bin_data)
+    generate_leverage_chart(bin_data, strategy_names)
+    generate_regime_chart(merged, strategy_names)
+    log("All charts generated.")
 
     # ---- Save output ----
     output_path = os.path.join(_this_dir, "monthly_stratification_output.txt")

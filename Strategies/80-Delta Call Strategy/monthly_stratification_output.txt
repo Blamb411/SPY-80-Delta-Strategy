@@ -94,3 +94,8 @@ STRATEGY SUMMARY (Full Period)
   UPRO B&H               CAGR: +32.0%  Sharpe: 0.80  MaxDD: -76.8%
   UPRO DD25/Cool40       CAGR: +31.0%  Sharpe: 0.90  MaxDD: -41.8%
   Syn 80D Opts           CAGR: +17.6%  Sharpe: 0.93  MaxDD: -36.4%
+
+==========================================================================================
+GENERATING CHARTS
+==========================================================================================
+All charts generated.
