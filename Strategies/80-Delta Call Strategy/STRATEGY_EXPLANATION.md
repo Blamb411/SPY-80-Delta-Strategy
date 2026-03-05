@@ -903,7 +903,39 @@ A natural question is: what if we skip the share holdings entirely and just run 
 
 ### Comparison to UPRO DD25/Cool40
 
-For context, the UPRO DD25/Cool40 drawdown-exit strategy (a separate analysis) produced +31.0% CAGR with a 0.90 Sharpe and -41.8% max drawdown over 2009-2026—higher returns with better risk-adjusted performance and dramatically less complexity (31 trades vs 1,233). The 80-delta options approach does not justify the added operational burden for investors who can hold leveraged ETFs.
+To compare these two leveraged strategies on equal footing, we ran both over matching time periods. Script: `strategy_comparison.py`.
+
+**Table 9: Same-Period Comparison, 2015-2026 (Actual Data for Both)**
+
+| Metric | UPRO DD25/Cool40 | 80-Delta Opts-Only | SPY B&H |
+|--------|------------------|--------------------|---------|
+| End Value ($100K) | $1,175,092 | $1,108,423 | $389,907 |
+| CAGR | +25.2% | +24.7% | +13.2% |
+| Sharpe | 0.79 | **0.85** | 0.79 |
+| Sortino | 0.92 | **0.95** | -- |
+| Max Drawdown | -41.8% | **-39.1%** | -33.7% |
+| Calmar | 0.60 | **0.63** | 0.39 |
+| Trades | ~15 | 1,233 | 1 |
+
+Over the same 2015-2026 period, the two strategies are remarkably close in raw returns (+25.2% vs +24.7% CAGR). The 80-delta options approach actually edges ahead on risk-adjusted metrics (Sharpe 0.85 vs 0.79, lower max drawdown), though it requires ~80x more trades.
+
+**Table 10: Full-Period Comparison, 2009-2026 (Actual UPRO, Synthetic Options)**
+
+| Metric | UPRO DD25/Cool40 | Syn 80-Delta Opts | SPY B&H |
+|--------|------------------|-------------------|---------|
+| End Value ($100K) | $8,955,244 | $1,485,052 | $1,034,306 |
+| CAGR | **+31.0%** | +17.6% | +15.1% |
+| Sharpe | 0.90 | **0.93** | 0.90 |
+| Sortino | 1.07 | **1.21** | -- |
+| Max Drawdown | -41.8% | **-36.4%** | -33.7% |
+| Calmar | **0.74** | 0.48 | 0.45 |
+| Trades | 31 | 3,481 | 1 |
+
+*Caveat: Synthetic options use Black-Scholes pricing with VIX as IV proxy and 2% bid-ask spread. Results are approximate.*
+
+Over the full 2009-2026 period, UPRO DD25/Cool40 dominates on raw returns ($8.96M vs $1.49M), driven by UPRO's extraordinary compounding during the 2009-2021 bull run. However, the synthetic options approach shows better risk-adjusted performance (Sharpe 0.93 vs 0.90, Sortino 1.21 vs 1.07) with shallower drawdowns (-36.4% vs -41.8%). The key trade-off: UPRO delivers 14% more CAGR with 31 trades; 80-delta options deliver superior risk-adjusted returns with 3,481 trades.
+
+For investors who can hold leveraged ETFs, UPRO DD25/Cool40 is the clear winner on simplicity and raw performance. The 80-delta options approach is the better choice for investors who cannot hold leveraged ETFs (e.g., certain IRA custodians) or who prioritize risk-adjusted returns over absolute returns.
 
 ---
 
