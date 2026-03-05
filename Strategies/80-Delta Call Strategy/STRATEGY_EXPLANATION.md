@@ -937,6 +937,28 @@ Over the full 2009-2026 period, UPRO DD25/Cool40 dominates on raw returns ($8.96
 
 For investors who can hold leveraged ETFs, UPRO DD25/Cool40 is the clear winner on simplicity and raw performance. The 80-delta options approach is the better choice for investors who cannot hold leveraged ETFs (e.g., certain IRA custodians) or who prioritize risk-adjusted returns over absolute returns.
 
+### Monthly Return Stratification
+
+To understand *how* these strategies behave differently, we bucketed all 201 months (2009-2026) by SPY's monthly return and computed average returns for each strategy within each bucket. Script: `monthly_stratification.py`.
+
+**Key findings:**
+
+1. **UPRO delivers ~3x leverage across the distribution.** The average leverage ratio is 3.14x, ranging from 2.61x in mild up-months to 4.62x in shallow down-months (the asymmetry comes from volatility drag amplifying small losses). This confirms UPRO tracks its 3x daily mandate faithfully at the monthly level.
+
+2. **DD25/Cool40 compresses the tails.** In the worst months (SPY < -8%), UPRO B&H averages -31.3% while DD25/Cool40 averages only -13.0% — a 1.25x leverage ratio vs UPRO's 3.01x. The drawdown exit moves to cash during crashes, dramatically muting downside. In strong bull months (SPY > +8%), DD25/Cool40 captures only 1.43x vs UPRO's 3.18x — the cooling period occasionally keeps it in cash during sharp recoveries.
+
+3. **80-delta options have a natural downside floor.** In the worst months (SPY < -8%), the options-only strategy averages just -2.5% (0.24x leverage ratio) because the SMA filter moves entirely to cash during bear markets. In normal bull months (+2% to +5%), it delivers 1.5-1.7x leverage. But in extreme up-months (>+7%), returns compress to <1x because options' convexity works against long calls in sharp rallies (profit targets and max-hold exits cap gains before the full move plays out).
+
+**Regime summary (201 months):**
+
+| Regime | Count | SPY Avg | UPRO B&H | UPRO DD25 | 80D Opts |
+|--------|-------|---------|----------|-----------|----------|
+| Bear (SPY < -2%) | 39 | -5.2% | -16.2% | -12.3% | -5.6% |
+| Flat (-2% to +2%) | 71 | +0.3% | +0.2% | +0.4% | +0.1% |
+| Bull (SPY >= +2%) | 91 | +4.5% | +13.1% | +10.5% | +5.2% |
+
+The DD25/Cool40 advantage is clearest in bear months: it loses 3.9% less per month than UPRO B&H on average, compounding to massive outperformance over multiple bear months. The 80-delta options approach is even more defensive in bear markets (-5.6% vs -12.3%) but gives up more upside in bull markets (+5.2% vs +10.5%).
+
 ---
 
 ## Risks and Limitations
