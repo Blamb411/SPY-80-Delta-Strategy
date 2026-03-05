@@ -22,7 +22,8 @@ The explanation is written for readers who are comfortable with mathematics and 
 10. [Implementation Details](#implementation-details)
 11. [The Software Components](#the-software-components)
 12. [Strategy Capacity and Scalability](#strategy-capacity-and-scalability)
-13. [Risks and Limitations](#risks-and-limitations)
+13. [Options-Only Backtest Results](#options-only-backtest-results)
+14. [Risks and Limitations](#risks-and-limitations)
 
 ---
 
@@ -38,7 +39,7 @@ All backtests use a combined portfolio of:
 
 The $100,000 options allocation is discretionary and can be scaled based on risk tolerance. We chose this ratio (~14% options to ~86% shares) as a balanced starting point. Investors seeking more aggressive returns could increase the options allocation, while those seeking lower volatility could decrease it.
 
-**Important Risk Note:** The options-only component can experience brutal drawdowns (50-80% in flash crashes or overnight gaps). This is why we recommend pairing the options strategy with a larger share holding as a foundation—the combined portfolio dampens the options volatility significantly.
+**Options-Only Performance:** A standalone $100K options-only portfolio (no shares, no delta cap) was backtested separately over 2015-2026: **+24.7% CAGR, 0.85 Sharpe, -39.1% max drawdown** ($100K → $1.1M). While the raw returns are higher than the combined portfolio, the drawdowns are worse and the Sharpe/Sortino ratios are lower than the combined. The SPY shares provide critical ballast—the combined portfolio's Sortino (1.01) significantly exceeds the options-only Sortino (0.95) because the shares dampen downside volatility. See the [Options-Only Backtest Results](#options-only-backtest-results) section for full details.
 
 ### Position Sizing in Backtests vs. Live Trading
 
@@ -524,7 +525,7 @@ Rather than exiting immediately when price crosses below SMA200, we allow a 2% b
 
 We limit total options delta to match share holdings (e.g., 1,000 delta for 1,000 shares), creating a maximum effective leverage of ~2x.
 
-**Note:** The delta cap is a discretionary risk management feature. Investors with higher risk tolerance could remove or increase the cap, while conservative investors could lower it. Our backtests use the delta cap as shown, but the options-only component (without the share holdings) also generates positive returns. The cap prevents runaway leverage accumulation during strong uptrends.
+**Note:** The delta cap is a discretionary risk management feature. Investors with higher risk tolerance could remove or increase the cap, while conservative investors could lower it. A dedicated options-only backtest (no shares, no delta cap) produced +24.7% CAGR and 0.85 Sharpe—see [Options-Only Backtest Results](#options-only-backtest-results). However, the combined portfolio with the delta cap achieves a higher Sharpe (1.03) and Sortino (1.35) due to the diversification benefit of the share ballast.
 
 ### 4. The 50% Profit Target
 
@@ -588,11 +589,11 @@ Here's something that initially seems paradoxical.
 
 | Component | Sharpe Ratio | Sortino Ratio |
 |-----------|--------------|---------------|
-| SPY shares alone | ~0.67 | ~0.95 |
-| Options strategy alone | ~0.6 | ~0.8 |
-| **Combined portfolio** | **~1.03** | **~1.35** |
+| SPY shares alone | ~0.80 | — |
+| Options-only (no cap) | 0.85 | 0.95 |
+| **Combined portfolio** | **1.03** | **1.35** |
 
-How can combining two things with Sharpe ~0.6 produce a combined Sharpe >1.0? They're both long SPY exposure—shouldn't they be perfectly correlated?
+How can combining two components produce a combined Sharpe greater than either individually? They're both long SPY exposure—shouldn't they be perfectly correlated?
 
 ### The Resolution
 
@@ -841,6 +842,71 @@ The strategy generates perhaps 3-5% annual alpha. This is meaningful but not ext
 
 ---
 
+## Options-Only Backtest Results
+
+A natural question is: what if we skip the share holdings entirely and just run the 80-delta call strategy with $100K? To answer this, we ran a dedicated backtest with no SPY shares and no delta cap, using actual ThetaData option pricing (not a leverage model approximation).
+
+### Setup
+
+- **Starting capital:** $100,000 (options cash only, no SPY shares)
+- **Delta cap:** None (uncapped — buy as long as cash is available)
+- **Covered calls:** No (no shares to write against)
+- **Entry pacing:** 1 contract per signal (same as combined backtest)
+- **All other rules identical:** SMA200 filter, 2% exit threshold, +50% PT, 60-day MH, monthly expirations
+- **Period:** March 2015 – January 2026 (10.9 years)
+- **Script:** `options_only_metrics.py`
+
+### Results
+
+**Table 8: Options-Only Portfolio Performance**
+
+| Metric | Options-Only | Combined Portfolio | SPY B&H |
+|--------|-------------|-------------------|---------|
+| Starting Value | $100,000 | ~$740,000 | — |
+| Ending Value | $1,108,423 | — | — |
+| CAGR | **+24.7%** | +19.6% | +13.4% |
+| Sharpe | 0.85 | **1.03** | 0.80 |
+| Sortino | 0.95 | **1.35** | — |
+| Max Drawdown | -39.1% | **-32.3%** | -33.7% |
+| Calmar | 0.63 | — | — |
+| Total Trades | 1,233 | ~1,050 | — |
+| Win Rate | 72.5% | 71.3% | — |
+| Total P&L | +$1,000,507 | — | — |
+
+### Year-by-Year Returns
+
+| Year | Options-Only | SPY |
+|------|-------------|-----|
+| 2015 | -23.3% | -1.8% |
+| 2016 | +29.8% | +13.6% |
+| 2017 | +101.0% | +20.8% |
+| 2018 | -5.6% | -5.2% |
+| 2019 | +69.2% | +31.1% |
+| 2020 | +54.3% | +17.2% |
+| 2021 | +100.0% | +30.5% |
+| 2022 | -23.0% | -18.6% |
+| 2023 | +3.6% | +26.7% |
+| 2024 | +30.6% | +25.6% |
+| 2025 | +8.5% | +18.0% |
+
+### Key Observations
+
+1. **Higher raw returns, lower risk-adjusted returns.** The options-only CAGR (+24.7%) significantly exceeds the combined portfolio (+19.6%), but the Sharpe (0.85 vs 1.03) and Sortino (0.95 vs 1.35) are meaningfully worse. The share ballast improves risk-adjusted performance by dampening downside volatility.
+
+2. **Drawdowns are worse but manageable.** The -39.1% max drawdown is worse than SPY B&H (-33.7%) and the combined portfolio (-32.3%), but far less catastrophic than the -50% to -80% that might be feared from a leveraged options-only approach. The SMA200 filter does the heavy lifting by moving to cash during bear markets.
+
+3. **Removing the delta cap added ~180 trades.** Without the 3,125-delta cap, 1,233 trades were executed vs ~1,050 in the capped version. CAGR improved from 22.4% (capped) to 24.7% (uncapped), though the delta cap only blocked entries on 1 occasion in the combined backtest—the incremental trades mostly came from having slightly more cash available (no capital tied up in share-ballast accounting).
+
+4. **2023 was an anomaly.** The options-only portfolio returned just +3.6% while SPY gained +26.7%. This reflects the strategy's weakness in narrow-breadth rallies where SPY advances steadily without triggering the SMA filter but without the sharp up-moves that generate outsized option returns.
+
+5. **The combined structure is the better design.** For most investors, the combined portfolio (shares + options overlay) is superior because it achieves a higher Sharpe ratio with lower drawdowns. The options-only approach is only preferable for investors who prioritize raw CAGR over risk-adjusted returns and can tolerate the larger drawdowns and higher operational complexity of managing ~1,200 option trades over a decade.
+
+### Comparison to UPRO DD25/Cool40
+
+For context, the UPRO DD25/Cool40 drawdown-exit strategy (a separate analysis) produced +31.0% CAGR with a 0.90 Sharpe and -41.8% max drawdown over 2009-2026—higher returns with better risk-adjusted performance and dramatically less complexity (31 trades vs 1,233). The 80-delta options approach does not justify the added operational burden for investors who can hold leveraged ETFs.
+
+---
+
 ## Risks and Limitations
 
 ### Known Risks
@@ -895,7 +961,7 @@ We tested multiple parameters and chose the best ones. Some outperformance may b
 
 | Scenario | Impact | Mitigation |
 |----------|--------|------------|
-| Flash crash overnight | Options lose 50-80% | Accept as cost of strategy |
+| Flash crash overnight | Options lose 30-50%+ | Accept as cost of strategy |
 | Prolonged sideways chop | Time decay erodes capital | SMA filter reduces exposure |
 | Rising rates crush valuations | Both shares and options decline | None - strategy is long-only |
 | Market structure change | Edge disappears | Monitor and adapt |
@@ -959,7 +1025,7 @@ It is not appropriate for investors who:
 
 ---
 
-*Document prepared February 2026. Last updated February 9, 2026. Backtest period: March 2015 - January 2026.*
+*Document prepared February 2026. Last updated March 5, 2026. Backtest period: March 2015 - January 2026.*
 
 ---
 
@@ -971,6 +1037,7 @@ It is not appropriate for investors who:
 - **Table 4:** Down-Day Entry - Scaled Position Size
 - **Table 5:** Extended Entry Zone Test
 - **Table 6:** RSI Filter Test
+- **Table 8:** Options-Only Portfolio Performance
 - **Table 7:** Weekly vs Monthly Expirations
 - **Table 8:** Puts Below SMA200 Test
 - **Table 9:** Tail Risk Hedge Test
