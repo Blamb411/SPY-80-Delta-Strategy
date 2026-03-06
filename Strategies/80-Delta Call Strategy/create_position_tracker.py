@@ -296,7 +296,7 @@ def load_pcs_trades():
 # SHEET 1: 80-DELTA CALLS
 # ============================================================================
 
-def build_80delta_sheet(ws, price_map, today):
+def build_80delta_sheet(ws, price_map, sma_map, today):
     s = get_styles()
     spy_price = price_map.get("SPY", 600.0)
     qqq_price = price_map.get("QQQ", 500.0)
@@ -355,10 +355,25 @@ def build_80delta_sheet(ws, price_map, today):
     cell.font = Font(name="Calibri", size=10, italic=True, color="1F4E79")
     cell.alignment = Alignment(horizontal="center")
 
+    row = 3
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=27)
+    sma_parts = []
+    for sym in ["SPY", "QQQ"]:
+        sma_val = sma_map.get(sym)
+        if sma_val:
+            diff = price_map.get(sym, 0) - sma_val
+            pct = diff / sma_val * 100 if sma_val else 0
+            sma_parts.append(f"{sym} SMA200: ${sma_val:.2f} ({pct:+.1f}%)")
+        else:
+            sma_parts.append(f"{sym} SMA200: N/A")
+    cell = ws.cell(row=row, column=1, value="  |  ".join(sma_parts))
+    cell.font = Font(name="Calibri", size=10, italic=True, color="1F4E79")
+    cell.alignment = Alignment(horizontal="center")
+
     # ========================================================================
     # STRATEGY CRITERIA SECTION
     # ========================================================================
-    row = 4
+    row = 5
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
     cell = ws.cell(row=row, column=1, value="Strategy Criteria")
     cell.font = s["section_font"]
@@ -1033,10 +1048,17 @@ def build_spreadsheet(output_path):
 
     wb = openpyxl.Workbook()
 
+    # Compute SMAs for 80-delta sheet header
+    delta_sma_map = {}
+    for sym in ["SPY", "QQQ"]:
+        sma = compute_sma200(sym)
+        if sma:
+            delta_sma_map[sym] = sma
+
     # Sheet 1: 80-Delta Calls
     ws1 = wb.active
     ws1.title = "80-Delta Calls"
-    delta_results = build_80delta_sheet(ws1, price_map, today)
+    delta_results = build_80delta_sheet(ws1, price_map, delta_sma_map, today)
 
     # Sheet 2: PCS Paper Trades
     ws2 = wb.create_sheet("PCS Paper Trades")
