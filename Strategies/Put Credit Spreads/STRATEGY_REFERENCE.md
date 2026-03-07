@@ -138,6 +138,18 @@ Shorter intervals increase trade count and total P&L with improving Sharpe ratio
 | PSR | 92.5% |
 | Trades per year | 21.1 |
 
+### QQQ by Entry Interval
+
+| Metric | Interval=5 | Interval=1 |
+|--------|-----------|-----------|
+| Total trades | 293 | 976 |
+| Win rate | 81.9% | 84.6% |
+| Total P&L | +$4,257 | +$17,192 |
+| Avg P&L/trade | +$14.53 | +$17.62 |
+| Annualized Sharpe | 0.460 | 0.976 |
+| Annualized Sortino | 0.515 | 1.067 |
+| Trades per year | 21.1 | 70.1 |
+
 ### Combined Portfolio (SPY + QQQ, interval=5)
 | Metric | Value |
 |--------|-------|
@@ -147,18 +159,38 @@ Shorter intervals increase trade count and total P&L with improving Sharpe ratio
 | Avg P&L/trade | +$15.99 |
 | Trades per year | 34.8 |
 
+### Why Interval=1 Outperforms Interval=5
+
+The Sharpe improvement from interval=5 to interval=1 is not a bug or artifact of the VIX fix — it reflects a real property of how premium-selling strategies interact with volatility clustering.
+
+**High-vol periods are where all the money is made.** The VIX bucket breakdown shows this clearly: VIX 20+ trades have 95-100% win rates and $40-78 avg P&L, while VIX < 15 trades are slightly negative. Elevated volatility tends to persist for weeks or months (2020 COVID recovery, 2022 bear market exits, rate-hike cycles). With interval=5, the strategy enters at most one position per week during these golden windows. With interval=1, it enters daily, stacking up overlapping positions that each benefit from the elevated premium.
+
+**The added trades are disproportionately high-quality.** Looking at the SPY VIX bucket scaling from interval=5 to interval=1:
+
+| VIX Bucket | Int=5 trades | Int=1 trades | Multiplier |
+|------------|-------------|-------------|------------|
+| Very Low (0-15) | 37 | 85 | 2.3x |
+| Low (15-20) | 84 | 195 | 2.3x |
+| Medium (20-25) | 43 | 127 | 3.0x |
+| High (25-30) | 20 | 74 | 3.7x |
+| Very High (30+) | 6 | 28 | 4.7x |
+
+High-vol buckets scale up faster because those periods have more consecutive entry opportunities (fewer SMA/IV rank rejections, more data availability). The low-vol bucket grows the least. This composition shift improves the average trade quality.
+
+**Important caveat — correlated drawdowns.** The per-trade Sharpe doesn't capture position overlap risk. With interval=1, you may have 10-20 overlapping positions that all face the same market move. A sharp selloff could stop out many simultaneously. The 2022 QQQ results hint at this: 4 trades, 25% win rate, -$1,595. A portfolio-level equity curve Sharpe (accounting for concurrent position exposure) would be lower than the per-trade Sharpe reported here.
+
 ### Capital Context
 - Average max loss per SPY contract: ~$1,279
 - Average credit per SPY trade: ~$0.52/share ($52/contract)
 - Average credit-to-width ratio: ~3.2% (SPY), ~4.8% (QQQ)
 
 ### Key Risk Metrics
-- Worst single year (QQQ): 2022, -$1,729 (3 trades, all stopped out in bear market)
+- Worst single year (QQQ): 2022, -$1,729 (3 trades at interval=5) / -$1,595 (4 trades at interval=1)
 - SPY worst years: 2014 (-$26), 2018 (-$62) — small losses relative to total P&L
 - SPY best years: 2020 (+$1,014), 2021 (+$812), 2025 (+$689)
 - SPY "Very Low VIX" bucket (VIX 0-15): 37 trades, -$162 — the IV rank filter catches most but not all low-premium entries
 
-### SPY Performance by VIX at Entry
+### SPY Performance by VIX at Entry (interval=5)
 | VIX Bucket | Trades | Win Rate | Total P&L | Avg P&L |
 |------------|--------|----------|-----------|---------|
 | Very Low (0-15) | 37 | 70.3% | -$162 | -$4.38 |
@@ -166,6 +198,15 @@ Shorter intervals increase trade count and total P&L with improving Sharpe ratio
 | Medium (20-25) | 43 | 97.7% | +$1,959 | +$45.56 |
 | High (25-30) | 20 | 100.0% | +$789 | +$39.45 |
 | Very High (30+) | 6 | 100.0% | +$465 | +$77.50 |
+
+### QQQ Performance by VXN at Entry (interval=1)
+| VXN Bucket | Trades | Win Rate | Total P&L | Avg P&L |
+|------------|--------|----------|-----------|---------|
+| Very Low (0-15) | 132 | 75.8% | -$158 | -$1.20 |
+| Low (15-20) | 387 | 78.6% | -$529 | -$1.37 |
+| Medium (20-25) | 214 | 87.9% | +$3,890 | +$18.18 |
+| High (25-30) | 123 | 95.1% | +$5,163 | +$41.98 |
+| Very High (30+) | 120 | 97.5% | +$8,826 | +$73.55 |
 
 ---
 
