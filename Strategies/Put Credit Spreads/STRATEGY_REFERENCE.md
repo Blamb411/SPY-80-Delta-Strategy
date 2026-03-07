@@ -38,15 +38,18 @@ The VIX must be at or above the 15th percentile of its trailing 252-day (1-year)
 
     IV Rank = (VIX_today - VIX_252day_low) / (VIX_252day_high - VIX_252day_low)
 
-This ensures there is adequate premium to sell. VIX is used as the volatility signal for both SPY and QQQ (they are highly correlated).
+This ensures there is adequate premium to sell. VIX is used as the volatility signal for SPY; VXN (Nasdaq-100 Volatility Index) is used for QQQ.
 
 **c) Entry Interval**
 At least 5 trading days must have elapsed since the last position was opened. This prevents overconcentration of risk around a single market event. Multiple positions can be open simultaneously (overlapping 30-day trades), but new entries are spaced apart.
 
 ### 2. Trade Construction
 
+**Expiration selection:**
+The strategy selects the expiration closest to 30 DTE within an acceptable range of 25-45 days. Both weekly and monthly expirations are eligible; no monthly-only filter is applied.
+
 **Short put selection:**
-Find the put option with delta closest to 0.20 on the nearest monthly expiration ~30 days out. A delta of 0.20 means roughly a 20% probability of finishing in the money. As volatility rises, this strike moves further from the current price in dollar terms, automatically adjusting for market conditions.
+The short put strike is determined by solving the Black-Scholes equation for a put with delta equal to 0.20, using the current spot price, the volatility index (VIX for SPY, VXN for QQQ) as the implied volatility input, and the target DTE. The resulting theoretical strike is rounded to the nearest integer and then snapped to the closest listed strike available for the selected expiration. A delta of 0.20 means roughly a 20% probability of finishing in the money. As volatility rises, this strike moves further from the current price in dollar terms, automatically adjusting for market conditions.
 
 **Long put selection (wing width):**
 The long put is placed below the short put at a distance determined by the expected move:
@@ -222,6 +225,7 @@ python portfolio_simulation.py
 | `--flat-delta` | 0.0 | Fixed delta (0 = use tier-based) |
 | `--wing-sigma` | 0.0 | Vol-scaled wing multiplier (0 = use percentage) |
 | `--synthetic-only` | false | Use only Black-Scholes pricing |
+| `--entry-interval` | 5 | Min trading days between entries |
 | `--export-csv` | — | Export trades to CSV file |
 
 Note: The code defaults (`DEFAULT_IV_RANK_LOW=0.30`, `DEFAULT_STOP_LOSS_MULT=2.0`, etc.) reflect the original conservative settings. The recommended configuration discovered through testing uses the CLI overrides shown above (`--iv-rank-low 0.15`, `--stop-loss-mult 3.0`, `--flat-delta 0.20`, `--wing-sigma 0.75`).
@@ -246,7 +250,7 @@ Note: The code defaults (`DEFAULT_IV_RANK_LOW=0.30`, `DEFAULT_STOP_LOSS_MULT=2.0
 
 The project contains many other files from earlier work on iron condors, Seeking Alpha stock picking, QuantConnect ports, and alternative data sources. These are unrelated to the put credit spread strategy documented here:
 
-- `options_scanner_claude.py`, `yield_hunter_claude.py` — IB-connected live scanners (iron condor and yield focus)
+- `options_scanner.py`, `yield_hunter.py` — IB-connected live scanners (iron condor and yield focus)
 - `backtest/condor_*.py` — Iron condor backtests (predecessor strategy)
 - `Massive backtesting/` — Alternative backtesting framework using Polygon/Massive API
 - `quantconnect/` — QuantConnect cloud backtest ports

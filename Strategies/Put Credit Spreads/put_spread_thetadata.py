@@ -303,16 +303,6 @@ def check_open_interest(client: ThetaDataClient, root: str, expiration: str,
     for leg in ("short_put", "long_put"):
         eod = client.get_option_eod(root, expiration, strikes[leg], "P",
                                     entry_date, entry_date)
-        if not eod:
-            # Try next few trading days as fallback
-            dt = datetime.strptime(entry_date, "%Y-%m-%d").date()
-            for offset in range(1, 4):
-                alt = (dt + timedelta(days=offset)).isoformat()
-                eod = client.get_option_eod(root, expiration, strikes[leg], "P",
-                                            alt, alt)
-                if eod:
-                    break
-
         oi = 0
         if eod:
             oi = eod[0].get("open_interest", 0)
@@ -353,26 +343,7 @@ def price_spread_entry_thetadata(client: ThetaDataClient, root: str,
     for leg_name, (right, strike) in legs.items():
         q = client.get_bid_ask(root, expiration, strike, right, entry_date)
         if q is None or q["bid"] <= 0 or q["ask"] <= 0:
-            # Try next few trading days as fallback
-            dt = datetime.strptime(entry_date, "%Y-%m-%d").date()
-            found = False
-            for offset in range(1, 6):
-                alt = (dt + timedelta(days=offset)).isoformat()
-                q = client.get_bid_ask(root, expiration, strike, right, alt)
-                if q and q["bid"] > 0 and q["ask"] > 0:
-                    found = True
-                    break
-            # If still not found, use earliest row from prefetch
-            if not found and prefetched[leg_name]:
-                for row in prefetched[leg_name]:
-                    bid = row.get("bid", 0)
-                    ask = row.get("ask", 0)
-                    if bid > 0 and ask > 0:
-                        q = {"bid": bid, "ask": ask, "quote_date": row["bar_date"]}
-                        found = True
-                        break
-            if not found:
-                return None
+            return None  # skip trade -- no entry-date quotes available
         entry_quotes[leg_name] = q
 
     # Credit = sell short put at bid, buy long put at ask
@@ -798,7 +769,8 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
                  iv_rank_high: float = DEFAULT_IV_RANK_HIGH,
                  flat_delta: float = DEFAULT_FLAT_DELTA,
                  wing_sigma: float = DEFAULT_WING_SIGMA,
-                 root: str = "SPY") -> tuple:
+                 root: str = "SPY",
+                 entry_interval: int = ENTRY_INTERVAL) -> tuple:
     """
     Run the full ThetaData put credit spread backtest.
 
@@ -816,6 +788,7 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
         flat_delta: Fixed delta for all tiers (0 = use tier-based scaling)
         wing_sigma: Vol-scaled wing multiplier (0 = use percentage-based wing_width_pct)
         root: Ticker symbol for options (e.g. "SPY", "QQQ", "IWM")
+        entry_interval: Minimum trading days between new positions (default 5)
     """
     start = f"{start_year}-01-01"
     end = f"{end_year}-12-31"
@@ -838,6 +811,7 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
     log.info("  MIN C/W:    %s", f"{min_credit_width_ratio:.0%}" if min_credit_width_ratio > 0 else "OFF")
     log.info("  MIN OI:     %s", f"{min_open_interest}" if min_open_interest > 0 else "OFF")
     log.info("  TICKER:     %s", root)
+    log.info("  INTERVAL:   %d trading days", entry_interval)
     log.info("=" * 70)
 
     # Initialize client
@@ -855,9 +829,16 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
     lookback_start = (datetime.strptime(start, "%Y-%m-%d").date()
                       - timedelta(days=lookback_days)).isoformat()
 
-    vix_history = client.fetch_vix_history(lookback_start, end)
-    if not vix_history:
-        log.error("Cannot proceed without VIX data")
+    # Fetch volatility index: VXN for QQQ, VIX for everything else
+    if root == "QQQ":
+        vol_history = client.fetch_volatility_index("^VXN", lookback_start, end)
+        if not vol_history:
+            log.warning("VXN not available, falling back to VIX for QQQ")
+            vol_history = client.fetch_vix_history(lookback_start, end)
+    else:
+        vol_history = client.fetch_vix_history(lookback_start, end)
+    if not vol_history:
+        log.error("Cannot proceed without volatility index data")
         return []
 
     # Fetch unified price bars array from lookback_start through end
@@ -886,10 +867,10 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
     skipped_oi = 0
     skipped_cw = 0
     skipped_data = 0
-    last_entry_idx = start_idx - ENTRY_INTERVAL  # allow first bar
+    last_entry_idx = start_idx - entry_interval  # allow first bar
 
     for idx in range(start_idx, len(spy_bars)):
-        if idx - last_entry_idx < ENTRY_INTERVAL:
+        if idx - last_entry_idx < entry_interval:
             continue
 
         bar = spy_bars[idx]
@@ -905,31 +886,29 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
         passes_sma, sma_value = check_sma_filter(spy_bars, idx, sma_period)
         if not passes_sma:
             skipped_sma += 1
-            last_entry_idx = idx
             continue
 
-        # Get VIX for this date
-        vix = vix_history.get(entry_date)
+        # Get volatility index value for this date
+        vix = vol_history.get(entry_date)
         if vix is None:
             dt = datetime.strptime(entry_date, "%Y-%m-%d").date()
             for offset in (-1, 1, -2, 2):
                 alt = (dt + timedelta(days=offset)).isoformat()
-                vix = vix_history.get(alt)
+                vix = vol_history.get(alt)
                 if vix is not None:
                     break
         if vix is None:
             continue
 
         # IV rank pre-check
-        iv_rank = compute_vix_iv_rank(vix, vix_history, entry_date)
+        iv_rank = compute_vix_iv_rank(vix, vol_history, entry_date)
         if iv_rank is not None and (iv_rank < iv_rank_low or iv_rank > iv_rank_high):
             skipped_iv += 1
-            last_entry_idx = idx
             continue
 
         # Attempt trade
         result = simulate_spread_trade(
-            client, entry_date, spot, vix, vix_history,
+            client, entry_date, spot, vix, vol_history,
             spy_bars, bar_idx_map, use_synthetic=synthetic_only,
             stop_loss_mult=stop_loss_mult,
             sma_value=sma_value,
@@ -946,17 +925,14 @@ def run_backtest(start_year: int = 2012, end_year: int = 2026,
 
         if result == "skip_oi":
             skipped_oi += 1
-            last_entry_idx = idx
             continue
 
         if result == "skip_cw_ratio":
             skipped_cw += 1
-            last_entry_idx = idx
             continue
 
         if result is None:
             skipped_data += 1
-            last_entry_idx = idx  # still consume the 5-day cooldown
             continue
 
         trades.append(result)
@@ -1374,9 +1350,13 @@ def main():
                         metavar="MULT",
                         help=f"Vol-scaled wing multiplier "
                              f"(default {DEFAULT_WING_SIGMA}, 0 = use percentage-based)")
-    parser.add_argument("--ticker", type=str, default="SPY",
+    parser.add_argument("--ticker", "--root", type=str, default="SPY",
                         metavar="SYM",
                         help="Ticker symbol (default SPY)")
+    parser.add_argument("--entry-interval", type=int, default=ENTRY_INTERVAL,
+                        metavar="DAYS",
+                        help=f"Min trading days between entries "
+                             f"(default {ENTRY_INTERVAL})")
     parser.add_argument("--export-csv", type=str, default=None,
                         metavar="FILE",
                         help="Export trades to CSV file")
@@ -1406,6 +1386,7 @@ def main():
         flat_delta=args.flat_delta,
         wing_sigma=args.wing_sigma,
         root=args.ticker.upper(),
+        entry_interval=args.entry_interval,
     )
     elapsed = time.time() - t0
 

@@ -4,7 +4,7 @@ Iron Condor Backtester
 Simulates iron condor entries across historical data using
 Black-Scholes theoretical pricing.
 
-Implements the options_scanner_claude.py entry logic:
+Implements the options_scanner.py entry logic:
 - Dynamic short delta based on IV Rank (20/25/30 delta)
 - Symmetric iron condor structure
 - Full premium capture if price stays between short strikes

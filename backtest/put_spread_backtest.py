@@ -4,7 +4,7 @@ Put Credit Spread Backtester
 Simulates put credit spread entries across historical data using
 Black-Scholes theoretical pricing.
 
-Implements the yield_hunter_claude.py entry logic:
+Implements the yield_hunter.py entry logic:
 - Price > 200 SMA (uptrend filter)
 - RSI < 75 (not overbought)
 - IV Rank > threshold (elevated premium)
