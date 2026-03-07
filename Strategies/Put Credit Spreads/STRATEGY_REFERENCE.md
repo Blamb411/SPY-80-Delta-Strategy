@@ -96,54 +96,76 @@ Options implied volatility consistently overstates actual realized volatility. T
 
 ## Backtest Results (2012-2025)
 
-### SPY
-| Metric | Value |
-|--------|-------|
-| Total trades | 160 |
-| Win rate | 92.5% |
-| Total P&L | +$7,578 |
-| Avg P&L/trade | +$47.36 |
-| Stop losses triggered | 12 |
-| Annualized Sharpe | 1.316 |
-| Annualized Sortino | 8.844 |
-| Trades per year | 11.5 |
+Results below reflect the corrected backtester (March 2026): no future-quote lookahead, cooldown only on actual trades, VXN for QQQ.
 
-### QQQ
+### SPY (entry interval = 5 days)
 | Metric | Value |
 |--------|-------|
-| Total trades | 215 |
+| Total trades | 190 |
 | Win rate | 84.7% |
-| Total P&L | +$4,320 |
-| Avg P&L/trade | +$20.09 |
-| Stop losses triggered | 32 |
-| Annualized Sharpe | 0.454 |
-| Annualized Sortino | 0.620 |
-| Trades per year | 15.5 |
+| Total P&L | +$3,468 |
+| Avg P&L/trade | +$18.25 |
+| Stop losses triggered | 29 |
+| Annualized Sharpe | 1.018 |
+| Annualized Sortino | 1.285 |
+| PSR | 99.4% |
+| Trades per year | 13.7 |
 
-### Combined Portfolio (SPY + QQQ)
+### SPY by Entry Interval
+
+| Metric | Interval=5 | Interval=3 | Interval=1 |
+|--------|-----------|-----------|-----------|
+| Total trades | 190 | 243 | 509 |
+| Win rate | 84.7% | 86.0% | 89.2% |
+| Total P&L | +$3,468 | +$4,187 | +$9,633 |
+| Avg P&L/trade | +$18.25 | +$17.23 | +$18.93 |
+| Annualized Sharpe | 1.018 | 1.184 | 1.374 |
+| Annualized Sortino | 1.285 | 1.486 | 1.564 |
+| Trades per year | 13.7 | 17.5 | 36.7 |
+
+Shorter intervals increase trade count and total P&L with improving Sharpe ratios, at the cost of more overlapping positions and higher capital requirements.
+
+### QQQ (VXN, entry interval = 5 days)
 | Metric | Value |
 |--------|-------|
-| Total trades | 375 |
-| Win rate | 88.0% |
-| Total P&L | +$11,898 |
-| Avg P&L/trade | +$31.73 |
-| Annualized Sharpe | 0.968 |
-| Annualized Sortino | 1.452 |
-| Trades per year | 27.0 |
+| Total trades | 293 |
+| Win rate | 81.9% |
+| Total P&L | +$4,257 |
+| Avg P&L/trade | +$14.53 |
+| Stop losses triggered | 53 |
+| Annualized Sharpe | 0.460 |
+| Annualized Sortino | 0.515 |
+| PSR | 92.5% |
+| Trades per year | 21.1 |
+
+### Combined Portfolio (SPY + QQQ, interval=5)
+| Metric | Value |
+|--------|-------|
+| Total trades | 483 |
+| Win rate | 83.0% |
+| Total P&L | +$7,725 |
+| Avg P&L/trade | +$15.99 |
+| Trades per year | 34.8 |
 
 ### Capital Context
-- Average max loss per SPY contract: ~$1,359
-- Average credit per SPY trade: ~$0.82/share ($82/contract)
-- Average credit-to-width ratio: ~4.9%
-- On a $10K account trading 1 contract at a time: +74% total return over 13 years (4.07% CAGR)
-- Average capital at risk: ~$1,962 per position
-- CAGR on deployed capital: ~11.9%
+- Average max loss per SPY contract: ~$1,279
+- Average credit per SPY trade: ~$0.52/share ($52/contract)
+- Average credit-to-width ratio: ~3.2% (SPY), ~4.8% (QQQ)
 
 ### Key Risk Metrics
-- Worst single year (QQQ): 2022, -$1,493 (bear market, SMA filter helped but QQQ still had losses)
-- SPY had no negative years except 2014 (-$9) and 2018 (-$15)
-- Max drawdown on $10K account: ~$238 (1.93% of account)
-- Max drawdown on deployed capital: ~12.1%
+- Worst single year (QQQ): 2022, -$1,729 (3 trades, all stopped out in bear market)
+- SPY worst years: 2014 (-$26), 2018 (-$62) — small losses relative to total P&L
+- SPY best years: 2020 (+$1,014), 2021 (+$812), 2025 (+$689)
+- SPY "Very Low VIX" bucket (VIX 0-15): 37 trades, -$162 — the IV rank filter catches most but not all low-premium entries
+
+### SPY Performance by VIX at Entry
+| VIX Bucket | Trades | Win Rate | Total P&L | Avg P&L |
+|------------|--------|----------|-----------|---------|
+| Very Low (0-15) | 37 | 70.3% | -$162 | -$4.38 |
+| Low (15-20) | 84 | 79.8% | +$417 | +$4.96 |
+| Medium (20-25) | 43 | 97.7% | +$1,959 | +$45.56 |
+| High (25-30) | 20 | 100.0% | +$789 | +$39.45 |
+| Very High (30+) | 6 | 100.0% | +$465 | +$77.50 |
 
 ---
 
@@ -151,13 +173,13 @@ Options implied volatility consistently overstates actual realized volatility. T
 
 1. **Gap risk**: The stop loss assumes you can exit at 3x credit. In a gap-down or liquidity crisis, actual losses could exceed the stop level.
 
-2. **Sample size in tails**: 12 stop losses on SPY over 13 years is a small sample. The strategy has not been tested through a 2008-style event with live options data.
+2. **Sample size in tails**: 29 stop losses on SPY over 13 years is a small sample. The strategy has not been tested through a 2008-style event with live options data.
 
 3. **Execution costs**: The backtest uses historical bid/ask quotes where available but does not model slippage, partial fills, or commission costs.
 
-4. **QQQ is marginal**: Sharpe of 0.454 is not strong. QQQ adds diversification but also adds volatility. A SPY-only approach is defensible.
+4. **QQQ is weaker**: Sharpe of 0.460 with 18% stop-loss rate. QQQ adds diversification but also adds volatility. A SPY-only approach is defensible.
 
-5. **Capital efficiency**: The strategy underperforms SPY buy-and-hold on an absolute return basis (4.07% CAGR vs 14.80%). Its advantage is lower drawdown and uncorrelated return stream.
+5. **Data skip rate**: 702 of 2,760 evaluated days (25%) were skipped due to missing ThetaData quotes. These are not random — they tend to cluster around holidays and low-liquidity periods, which could introduce survivorship-like bias.
 
 ---
 
