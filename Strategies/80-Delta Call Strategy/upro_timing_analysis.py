@@ -44,6 +44,9 @@ END_DATE = "2026-03-03"
 DATA_START = "2008-01-01"
 TRADING_DAYS_PER_YEAR = 252
 
+# Module-level risk-free rate, set from ^IRX in main()
+_rf_annual = 0.0
+
 # ======================================================================
 # DATA LOADING
 # ======================================================================
@@ -58,6 +61,7 @@ def load_all_data():
         "TMF": UPRO_INCEPTION,
         "TLT": DATA_START,
         "^VIX": DATA_START,
+        "^IRX": DATA_START,
     }
 
     data = {}
@@ -96,16 +100,42 @@ def load_all_data():
 
 
 # ======================================================================
+# RISK-FREE RATE HELPERS
+# ======================================================================
+
+def get_daily_tbill_rate(irx_series):
+    """Convert ^IRX (13-week T-bill yield, e.g., 5.2 = 5.2%) to daily return."""
+    return (1 + irx_series / 100) ** (1 / TRADING_DAYS_PER_YEAR) - 1
+
+
+def avg_rf_annual(tbill_daily, dates):
+    """Compute average annualized risk-free rate over a date range."""
+    if tbill_daily is None or dates is None or len(dates) == 0:
+        return 0.0
+    tb = tbill_daily.reindex(dates).dropna()
+    if len(tb) == 0:
+        return 0.0
+    return float(tb.mean()) * TRADING_DAYS_PER_YEAR
+
+
+# ======================================================================
 # METRICS COMPUTATION
 # ======================================================================
 
-def compute_metrics(portfolio_values, name="", num_trades=0, days_invested=0, total_days=0):
-    """Compute performance metrics for a portfolio value series."""
+def compute_metrics(portfolio_values, name="", num_trades=0, days_invested=0,
+                    total_days=0, rf_annual=None):
+    """Compute performance metrics for a portfolio value series.
+    rf_annual: annualized risk-free rate (e.g. 0.02 for 2%) used for
+               Sharpe, Sortino, and Calmar excess-return calculations.
+               If None, uses the module-level _rf_annual (set from ^IRX in main).
+    """
+    if rf_annual is None:
+        rf_annual = _rf_annual
     values = np.array(portfolio_values, dtype=float)
     if len(values) < 2 or values[0] <= 0:
         return {
             "name": name, "end_value": 0, "cagr": 0, "sharpe": 0,
-            "sortino": 0, "max_dd": 0, "num_trades": 0,
+            "sortino": 0, "calmar": 0, "max_dd": 0, "num_trades": 0,
             "pct_invested": 0, "cagr_invested": 0,
         }
 
@@ -116,24 +146,29 @@ def compute_metrics(portfolio_values, name="", num_trades=0, days_invested=0, to
     daily_rets = np.diff(values) / values[:-1]
     daily_rets = daily_rets[np.isfinite(daily_rets)]
 
-    mean_ret = np.mean(daily_rets)
-    std_ret = np.std(daily_rets, ddof=1) if len(daily_rets) > 1 else 1e-10
-    sharpe = (mean_ret / std_ret) * np.sqrt(TRADING_DAYS_PER_YEAR) if std_ret > 0 else 0
+    daily_rf = rf_annual / TRADING_DAYS_PER_YEAR
+    excess_rets = daily_rets - daily_rf
 
-    downside = daily_rets[daily_rets < 0]
-    down_std = np.std(downside, ddof=1) if len(downside) > 1 else 1e-10
-    sortino = (mean_ret / down_std) * np.sqrt(TRADING_DAYS_PER_YEAR) if down_std > 0 else 0
+    std_ret = np.std(daily_rets, ddof=1) if len(daily_rets) > 1 else 1e-10
+    sharpe = (np.mean(excess_rets) / std_ret) * np.sqrt(TRADING_DAYS_PER_YEAR) if std_ret > 0 else 0
+
+    neg_excess = excess_rets[excess_rets < 0]
+    down_std = np.std(neg_excess, ddof=1) if len(neg_excess) > 1 else 1e-10
+    sortino = (np.mean(excess_rets) / down_std) * np.sqrt(TRADING_DAYS_PER_YEAR) if down_std > 0 else 0
 
     cummax = np.maximum.accumulate(values)
     drawdown = values / cummax - 1
     max_dd = np.min(drawdown)
+
+    # Calmar ratio (excess CAGR / |MaxDD|)
+    excess_cagr = cagr - rf_annual
+    calmar = excess_cagr / abs(max_dd) if max_dd != 0 else 0
 
     pct_invested = days_invested / total_days * 100 if total_days > 0 else 100.0
 
     # CAGR while invested
     if days_invested > 0 and end_val > 0:
         years_invested = days_invested / TRADING_DAYS_PER_YEAR
-        # Total return is end_val / initial
         total_return = end_val / values[0]
         cagr_invested = total_return ** (1 / years_invested) - 1 if years_invested > 0 else 0
     else:
@@ -145,6 +180,7 @@ def compute_metrics(portfolio_values, name="", num_trades=0, days_invested=0, to
         "cagr": cagr,
         "sharpe": sharpe,
         "sortino": sortino,
+        "calmar": calmar,
         "max_dd": max_dd,
         "num_trades": num_trades,
         "pct_invested": pct_invested,
@@ -658,7 +694,7 @@ def print_strategy_table(title, results):
     print(f"{'=' * 110}")
     header = (
         f"  {'Variant':<22} {'End Value':>14} {'CAGR':>8} {'Sharpe':>8} "
-        f"{'Sortino':>8} {'Max DD':>9} {'Trades':>7} {'%Invest':>8} {'CAGR Inv':>9}"
+        f"{'Sortino':>8} {'Calmar':>8} {'Max DD':>9} {'Trades':>7} {'%Invest':>8}"
     )
     print(header)
     print(f"  {'-' * 106}")
@@ -666,8 +702,8 @@ def print_strategy_table(title, results):
     for m in results:
         line = (
             f"  {m['name']:<22} ${m['end_value']:>12,.0f} {m['cagr']:>+7.1%} "
-            f"{m['sharpe']:>8.2f} {m['sortino']:>8.2f} {m['max_dd']:>8.1%} "
-            f"{m['num_trades']:>7} {m['pct_invested']:>7.1f}% {m['cagr_invested']:>+8.1%}"
+            f"{m['sharpe']:>8.2f} {m['sortino']:>8.2f} {m['calmar']:>8.2f} {m['max_dd']:>8.1%} "
+            f"{m['num_trades']:>7} {m['pct_invested']:>7.1f}%"
         )
         print(line)
 
@@ -679,7 +715,7 @@ def print_final_comparison(all_best):
     print(f"{'#' * 110}")
     header = (
         f"  {'Strategy':<26} {'End Value':>14} {'CAGR':>8} {'Sharpe':>8} "
-        f"{'Sortino':>8} {'Max DD':>9} {'Trades':>7} {'%Invest':>8}"
+        f"{'Sortino':>8} {'Calmar':>8} {'Max DD':>9} {'Trades':>7} {'%Invest':>8}"
     )
     print(header)
     print(f"  {'-' * 106}")
@@ -687,7 +723,7 @@ def print_final_comparison(all_best):
     for m in all_best:
         line = (
             f"  {m['name']:<26} ${m['end_value']:>12,.0f} {m['cagr']:>+7.1%} "
-            f"{m['sharpe']:>8.2f} {m['sortino']:>8.2f} {m['max_dd']:>8.1%} "
+            f"{m['sharpe']:>8.2f} {m['sortino']:>8.2f} {m['calmar']:>8.2f} {m['max_dd']:>8.1%} "
             f"{m['num_trades']:>7} {m['pct_invested']:>7.1f}%"
         )
         print(line)
@@ -870,6 +906,7 @@ def save_results_csv(benchmark_metrics, all_results, output_path):
         "cagr": "CAGR",
         "sharpe": "Sharpe",
         "sortino": "Sortino",
+        "calmar": "Calmar",
         "max_dd": "Max Drawdown",
         "num_trades": "Num Trades",
         "pct_invested": "Pct Invested",
@@ -898,12 +935,23 @@ def main():
     vix_close = data["^VIX"]["Close"]
     tlt_close = data["TLT"]["Close"]
     tmf_close = data["TMF"]["Close"]
+    irx_close = data["^IRX"]["Close"] if "^IRX" in data and not data["^IRX"].empty else None
 
     # Ensure all series have DatetimeIndex
     for name, series in [("SPY", spy_close), ("UPRO", upro_close),
                          ("VIX", vix_close), ("TLT", tlt_close), ("TMF", tmf_close)]:
         if not isinstance(series.index, pd.DatetimeIndex):
             series.index = pd.to_datetime(series.index)
+
+    # Compute risk-free rate from ^IRX (13-week T-bill yield)
+    global _rf_annual
+    if irx_close is not None and len(irx_close) > 0:
+        tbill_daily = get_daily_tbill_rate(irx_close)
+        _rf_annual = avg_rf_annual(tbill_daily, upro_close.index)
+        print(f"  Risk-free rate (avg ^IRX over UPRO period): {_rf_annual:.2%} annualized")
+    else:
+        _rf_annual = 0.0
+        print("  WARNING: ^IRX data not available, using 0% risk-free rate")
 
     # ---- BENCHMARK ----
     print("\n" + "-" * 80)
