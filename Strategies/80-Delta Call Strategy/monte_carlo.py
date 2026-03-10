@@ -52,6 +52,16 @@ def extract_daily_returns(snapshots):
     return returns
 
 
+def extract_options_only_returns(snapshots):
+    """Extract daily returns for the options-only component (cash + positions)."""
+    values = [s["options_cash"] + s["options_value"] for s in snapshots]
+    returns = []
+    for i in range(1, len(values)):
+        if values[i - 1] > 0:
+            returns.append(values[i] / values[i - 1] - 1.0)
+    return returns
+
+
 def bootstrap_daily_returns(daily_returns, n_iterations=10000, block_size=0, seed=42):
     """
     Bootstrap resample daily returns (IID or block).
@@ -134,10 +144,11 @@ def percentile(data, pct):
     return sorted_data[lo] * (1 - frac) + sorted_data[hi] * frac
 
 
-def print_report(results, n_days, n_iterations, block_size=0, hist_metrics=None):
+def print_report(results, n_days, n_iterations, block_size=0, hist_metrics=None,
+                 label="Combined Portfolio"):
     """Print Monte Carlo results."""
     print("=" * 70)
-    print("MONTE CARLO SIMULATION RESULTS  --  80-Delta Call Strategy")
+    print(f"MONTE CARLO SIMULATION RESULTS  --  {label}")
     print("=" * 70)
     print(f"  Trading days:      {n_days}")
     print(f"  Iterations:        {n_iterations:,}")
@@ -215,7 +226,7 @@ def main():
     print("Loading data...")
     t0 = time.time()
     spy_by_date, trading_dates, vix_data, sma200, monthly_exps, \
-        trailing_12m_returns, rolling_volatility = load_all_data(client)
+        trailing_12m_returns, rolling_volatility, spy_dividends = load_all_data(client)
 
     # Run simulation
     label = "no CC" if args.no_cc else "with CC"
@@ -224,6 +235,7 @@ def main():
         client, spy_by_date, trading_dates, vix_data, sma200, monthly_exps,
         trailing_12m_returns=trailing_12m_returns,
         rolling_volatility=rolling_volatility,
+        spy_dividends=spy_dividends,
         force_exit_below_sma=True,
         sell_covered_calls=not args.no_cc,
         label=label,
@@ -247,9 +259,11 @@ def main():
     print(f"Simulation complete: {len(snapshots)} days, "
           f"{len(trade_log)} trades in {sim_time:.1f}s")
 
-    # Extract daily returns
+    # Extract daily returns (combined and options-only)
     daily_returns = extract_daily_returns(snapshots)
-    print(f"Daily returns: {len(daily_returns)} observations")
+    options_returns = extract_options_only_returns(snapshots)
+    print(f"Daily returns: {len(daily_returns)} combined, "
+          f"{len(options_returns)} options-only observations")
 
     # Run bootstrap
     if args.block_size > 0:
@@ -259,6 +273,7 @@ def main():
     print(f"\nRunning {args.iterations:,} {mode_str} iterations...")
     mc_t0 = time.time()
 
+    # Combined portfolio bootstrap
     results = bootstrap_daily_returns(
         daily_returns,
         n_iterations=args.iterations,
@@ -266,10 +281,52 @@ def main():
         seed=args.seed,
     )
 
+    # Options-only bootstrap
+    options_results = bootstrap_daily_returns(
+        options_returns,
+        n_iterations=args.iterations,
+        block_size=args.block_size,
+        seed=args.seed + 1,
+    )
+
     mc_time = time.time() - mc_t0
 
+    # Options-only historical metrics
+    opt_values = [s["options_cash"] + s["options_value"] for s in snapshots]
+    opt_start, opt_end = opt_values[0], opt_values[-1]
+    n_days = len(daily_returns)
+    years = n_days / 252.0
+    opt_cagr = (opt_end / opt_start) ** (1 / years) - 1 if years > 0 and opt_end > 0 else 0
+    opt_mean = np.mean(options_returns)
+    opt_std = np.std(options_returns, ddof=1)
+    opt_sharpe = (opt_mean / opt_std) * np.sqrt(252) if opt_std > 0 else 0
+    opt_downside = [r for r in options_returns if r < 0]
+    opt_ds_std = np.std(opt_downside, ddof=1) if len(opt_downside) > 1 else 0
+    opt_sortino = (opt_mean / opt_ds_std) * np.sqrt(252) if opt_ds_std > 0 else 0
+    opt_peak = opt_values[0]
+    opt_max_dd = 0
+    for v in opt_values:
+        if v > opt_peak:
+            opt_peak = v
+        dd = (opt_peak - v) / opt_peak if opt_peak > 0 else 0
+        if dd > opt_max_dd:
+            opt_max_dd = dd
+    opt_hist_metrics = {
+        "cagr": opt_cagr,
+        "sharpe": opt_sharpe,
+        "sortino": opt_sortino,
+        "max_dd": opt_max_dd,
+    }
+
     print_report(results, len(daily_returns), args.iterations,
-                 block_size=args.block_size, hist_metrics=hist_metrics)
+                 block_size=args.block_size, hist_metrics=hist_metrics,
+                 label="Combined Portfolio (Shares + Options)")
+
+    print("\n")
+    print_report(options_results, len(options_returns), args.iterations,
+                 block_size=args.block_size, hist_metrics=opt_hist_metrics,
+                 label="Options-Only Portfolio")
+
     print(f"\nMonte Carlo completed in {mc_time:.1f}s (total {time.time()-t0:.1f}s)")
 
     client.close()

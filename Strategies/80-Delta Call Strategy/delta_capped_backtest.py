@@ -196,6 +196,9 @@ def load_all_data(client):
             # Annualize: daily vol * sqrt(252)
             rolling_volatility[today] = vol * np.sqrt(252)
 
+    print("Loading SPY dividends...")
+    spy_dividends = client.fetch_spy_dividends(DATA_START, DATA_END)
+
     print("Loading SPY expirations...")
     all_exps = client.get_expirations("SPY")
     monthly_exps = [(e, datetime.strptime(e, "%Y-%m-%d").date())
@@ -204,6 +207,7 @@ def load_all_data(client):
 
     print(f"  SPY bars: {len(spy_bars)} ({trading_dates[0]} to {trading_dates[-1]})")
     print(f"  VIX days: {len(vix_data)}")
+    print(f"  SPY dividends: {len(spy_dividends)} ex-dates")
     first_sma = sorted(sma200.keys())[0] if sma200 else "N/A"
     print(f"  SMA200 from: {first_sma}")
     first_ret = sorted(trailing_12m_returns.keys())[0] if trailing_12m_returns else "N/A"
@@ -213,7 +217,7 @@ def load_all_data(client):
     print(f"  Monthly expirations: {len(monthly_exps)} "
           f"({monthly_exps[0][0]} to {monthly_exps[-1][0]})")
 
-    return spy_by_date, trading_dates, vix_data, sma200, monthly_exps, trailing_12m_returns, rolling_volatility
+    return spy_by_date, trading_dates, vix_data, sma200, monthly_exps, trailing_12m_returns, rolling_volatility, spy_dividends
 
 
 # ======================================================================
@@ -222,7 +226,8 @@ def load_all_data(client):
 
 def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
                                  sma200, monthly_exps, trailing_12m_returns=None,
-                                 rolling_volatility=None, force_exit_below_sma=False,
+                                 rolling_volatility=None, spy_dividends=None,
+                                 force_exit_below_sma=False,
                                  sell_covered_calls=False, label=""):
     """
     Daily portfolio simulation with delta-capped options.
@@ -250,11 +255,15 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
     cc_skip_reasons = defaultdict(int)
     force_exit_count = 0
 
+    cumulative_dividends = 0.0
+
     # Default empty dicts if not provided
     if trailing_12m_returns is None:
         trailing_12m_returns = {}
     if rolling_volatility is None:
         rolling_volatility = {}
+    if spy_dividends is None:
+        spy_dividends = {}
 
     # Start from SIM_START
     start_idx = next((i for i, d in enumerate(trading_dates) if d >= SIM_START), 0)
@@ -287,6 +296,12 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
         # 1. Settle yesterday's exit proceeds
         options_cash += pending_cash
         pending_cash = 0.0
+
+        # 1b. Accumulate dividends (held as separate cash pool)
+        dividend_today = 0.0
+        if today in spy_dividends:
+            dividend_today = shares_held * spy_dividends[today]
+            cumulative_dividends += dividend_today
 
         # Calculate analysis fields for this day
         pct_above_sma = (spot - sma_val) / sma_val if sma_val else 0
@@ -619,7 +634,7 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
             cc_delta += cc_pos_delta
 
         # Total portfolio value (subtract CC liability since we'd need to buy back)
-        portfolio_value = shares_value + options_cash + pending_cash + positions_value - cc_liability
+        portfolio_value = shares_value + options_cash + pending_cash + positions_value - cc_liability + cumulative_dividends
 
         # Total delta: shares + long calls - covered calls (CC reduces delta exposure)
         net_options_delta = total_options_delta - cc_delta
@@ -638,6 +653,8 @@ def run_delta_capped_simulation(client, spy_by_date, trading_dates, vix_data,
             "options_value": positions_value,
             "cc_liability": cc_liability,
             "options_cash": options_cash + pending_cash,
+            "dividend_today": dividend_today,
+            "cumulative_dividends": cumulative_dividends,
             "n_positions": len(positions),
             "n_contracts": n_contracts,
             "n_cc_positions": len(cc_positions),
@@ -718,7 +735,7 @@ def compute_metrics(snapshots, trade_log, cc_trade_log=None, label=""):
     drawdown = df["portfolio_value"] / cummax - 1
     max_dd = drawdown.min()
 
-    # SPY B&H (shares only)
+    # SPY B&H (price-only, unadjusted)
     spy_start = df["spy_close"].iloc[0]
     spy_end = df["spy_close"].iloc[-1]
     spy_total = spy_end / spy_start - 1
@@ -727,9 +744,12 @@ def compute_metrics(snapshots, trade_log, cc_trade_log=None, label=""):
     spy_sharpe = (df["spy_ret"].mean() / df["spy_ret"].std()) * np.sqrt(252) if df["spy_ret"].std() > 0 else 0
     spy_dd = (df["spy_close"] / df["spy_close"].cummax() - 1).min()
 
-    # Shares-only B&H (what we'd have with just the 3,125 shares)
+    # Cumulative dividends
+    total_dividends = df["cumulative_dividends"].iloc[-1] if "cumulative_dividends" in df.columns else 0
+
+    # Shares-only B&H (shares + dividends, what we'd have without options)
     shares_only_start = start_shares
-    shares_only_end = df["shares_value"].iloc[-1]
+    shares_only_end = df["shares_value"].iloc[-1] + total_dividends
     shares_only_return = shares_only_end / shares_only_start - 1
     shares_only_cagr = (shares_only_end / shares_only_start) ** (1 / years) - 1 if years > 0 else 0
 
@@ -857,6 +877,7 @@ def compute_metrics(snapshots, trade_log, cc_trade_log=None, label=""):
         "spy_cagr": spy_cagr,
         "spy_sharpe": spy_sharpe,
         "spy_dd": spy_dd,
+        "cumulative_dividends": total_dividends,
         "shares_only_return": shares_only_return,
         "shares_only_cagr": shares_only_cagr,
         "options_return": options_return,
@@ -923,6 +944,13 @@ def print_results(metrics):
     print(f"  {'Total Return':<25} {m['total_return']:>+14.1%} {m['shares_only_return']:>+14.1%} {'--':>15}")
     print(f"  {'Sharpe':<25} {m['sharpe']:>15.2f} {'--':>15} {m['spy_sharpe']:>15.2f}")
     print(f"  {'Max DD':<25} {m['max_dd']:>14.1%} {'--':>15} {m['spy_dd']:>14.1%}")
+
+    # Dividends
+    if m.get("cumulative_dividends", 0) > 0:
+        print(f"\n{'-' * W}")
+        print("DIVIDENDS")
+        print(f"{'-' * W}")
+        print(f"  Cumulative Dividends:   ${m['cumulative_dividends']:,.0f}")
 
     # Options Component Performance
     print(f"\n{'-' * W}")
@@ -1188,13 +1216,14 @@ def main():
 
     print("Connected to Theta Terminal.\n")
 
-    spy_by_date, trading_dates, vix_data, sma200, monthly_exps, trailing_12m_returns, rolling_volatility = load_all_data(client)
+    spy_by_date, trading_dates, vix_data, sma200, monthly_exps, trailing_12m_returns, rolling_volatility, spy_dividends = load_all_data(client)
 
     # Run A: Thresh-exit WITHOUT covered calls (baseline)
     snaps_a, trades_a, cc_trades_a = run_delta_capped_simulation(
         client, spy_by_date, trading_dates, vix_data, sma200, monthly_exps,
         trailing_12m_returns=trailing_12m_returns,
         rolling_volatility=rolling_volatility,
+        spy_dividends=spy_dividends,
         force_exit_below_sma=True,
         sell_covered_calls=False,
         label="A: Thresh-exit (no CC)",
@@ -1205,6 +1234,7 @@ def main():
         client, spy_by_date, trading_dates, vix_data, sma200, monthly_exps,
         trailing_12m_returns=trailing_12m_returns,
         rolling_volatility=rolling_volatility,
+        spy_dividends=spy_dividends,
         force_exit_below_sma=True,
         sell_covered_calls=True,
         label="B: Thresh-exit + Covered Calls",

@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS option_greeks (
     PRIMARY KEY (root, expiration, strike, right, greeks_date)
 );
 
+CREATE TABLE IF NOT EXISTS spy_dividends (
+    ex_date TEXT PRIMARY KEY,
+    amount REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fetch_log (
     fetch_key TEXT PRIMARY KEY,
     fetched_at TEXT NOT NULL,
@@ -897,7 +902,7 @@ class ThetaDataClient:
 
         Returns list of dicts sorted by date.
         """
-        cache_key = f"spy_bars:{start}:{end}"
+        cache_key = f"spy_bars_v2:{start}:{end}"  # v2 = unadjusted close
 
         # Check if already fetched
         if _fetch_logged(self.conn, cache_key):
@@ -914,7 +919,7 @@ class ThetaDataClient:
         import yfinance as yf
 
         log.info("Fetching SPY bars from Yahoo Finance (%s to %s) ...", start, end)
-        spy = yf.download("SPY", start=start, end=end, progress=False)
+        spy = yf.download("SPY", start=start, end=end, progress=False, auto_adjust=False)
         if spy.empty:
             log.error("No SPY data returned from Yahoo Finance")
             return []
@@ -946,6 +951,48 @@ class ThetaDataClient:
         _log_fetch(self.conn, cache_key, len(results))
         log.info("  SPY: %d bars loaded", len(results))
         return results
+
+    def fetch_spy_dividends(self, start: str = "2011-01-01",
+                            end: str = "2026-01-31") -> Dict[str, float]:
+        """
+        Fetch SPY ex-dividend dates and per-share amounts from Yahoo Finance.
+        Cached in the spy_dividends SQLite table.
+
+        Returns dict mapping ex-date string -> dividend amount per share.
+        """
+        cache_key = f"spy_dividends:{start}:{end}"
+
+        if _fetch_logged(self.conn, cache_key):
+            rows = self.conn.execute(
+                """SELECT ex_date, amount FROM spy_dividends
+                   WHERE ex_date >= ? AND ex_date <= ?
+                   ORDER BY ex_date""",
+                (start, end),
+            ).fetchall()
+            if rows:
+                return {r["ex_date"]: r["amount"] for r in rows}
+
+        import yfinance as yf
+
+        log.info("Fetching SPY dividends from Yahoo Finance (%s to %s) ...", start, end)
+        ticker = yf.Ticker("SPY")
+        divs = ticker.dividends  # pd.Series indexed by datetime
+
+        result = {}
+        for dt, amount in divs.items():
+            d = dt.strftime("%Y-%m-%d")
+            if d < start or d > end:
+                continue
+            result[d] = float(amount)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO spy_dividends (ex_date, amount) VALUES (?, ?)",
+                (d, float(amount)),
+            )
+
+        self.conn.commit()
+        _log_fetch(self.conn, cache_key, len(result))
+        log.info("  SPY dividends: %d ex-dates loaded", len(result))
+        return result
 
     def fetch_ticker_bars(self, ticker: str, start: str = "2011-01-01",
                           end: str = "2026-01-31") -> List[Dict]:
