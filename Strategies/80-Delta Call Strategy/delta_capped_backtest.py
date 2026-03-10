@@ -735,14 +735,18 @@ def compute_metrics(snapshots, trade_log, cc_trade_log=None, label=""):
     drawdown = df["portfolio_value"] / cummax - 1
     max_dd = drawdown.min()
 
-    # SPY B&H (price-only, unadjusted)
-    spy_start = df["spy_close"].iloc[0]
-    spy_end = df["spy_close"].iloc[-1]
-    spy_total = spy_end / spy_start - 1
-    spy_cagr = (spy_end / spy_start) ** (1 / years) - 1 if years > 0 else 0
-    df["spy_ret"] = df["spy_close"].pct_change().fillna(0)
-    spy_sharpe = (df["spy_ret"].mean() / df["spy_ret"].std()) * np.sqrt(252) if df["spy_ret"].std() > 0 else 0
-    spy_dd = (df["spy_close"] / df["spy_close"].cummax() - 1).min()
+    # SPY B&H with dividends (same shares, same dividends as strategy)
+    spy_bh = df["shares_value"].values.copy()
+    if "cumulative_dividends" in df.columns:
+        spy_bh = spy_bh + df["cumulative_dividends"].values
+    spy_bh_start = spy_bh[0]
+    spy_bh_end = spy_bh[-1]
+    spy_total = spy_bh_end / spy_bh_start - 1
+    spy_cagr = (spy_bh_end / spy_bh_start) ** (1 / years) - 1 if years > 0 else 0
+    spy_bh_series = pd.Series(spy_bh)
+    spy_bh_ret = spy_bh_series.pct_change().fillna(0)
+    spy_sharpe = (spy_bh_ret.mean() / spy_bh_ret.std()) * np.sqrt(252) if spy_bh_ret.std() > 0 else 0
+    spy_dd = (spy_bh_series / spy_bh_series.cummax() - 1).min()
 
     # Cumulative dividends
     total_dividends = df["cumulative_dividends"].iloc[-1] if "cumulative_dividends" in df.columns else 0
