@@ -1,12 +1,16 @@
 """
-Generate position_tracker.xlsx with two sheets:
+Generate position_tracker.xlsx with four sheets:
   Sheet 1: SPY 80-Delta Call Strategy
   Sheet 2: Put Credit Spreads (PCS) Paper Trades
+  Sheet 3: TSLA Bear Put Debit Spread
+  Sheet 4: UPRO Long Position (DD25%/Cool40)
 
-Pulls live prices from yfinance, PCS trades from put_spread_paper.db.
+Pulls live prices from yfinance, PCS trades from put_spread_paper.db,
+Greeks from ThetaData (with BS fallback).
 """
 
 import math
+import sys
 import sqlite3
 from datetime import date, datetime, timedelta
 import numpy as np
@@ -108,6 +112,21 @@ TRADES = [
     },
 ]
 
+TSLA_SPREAD = {
+    "symbol": "TSLA", "structure": "Bear Put Debit Spread", "account": "IRA",
+    "entry_date": "2026-03-09", "expiration": "2027-01-15",
+    "long_strike": 300, "long_qty": 10, "long_entry_price": 28.50,
+    "short_strike": 250, "short_qty": 10, "short_entry_price": 16.10,
+    "net_debit": 12.40, "tsla_at_entry": 392.20,
+}
+
+UPRO_POSITION = {
+    "symbol": "UPRO", "account": "IRA", "shares": 1000,
+    "entry_price": 109.80, "entry_date": "2026-03-10",
+    "strategy": "DD25%/Cool40", "dd_threshold": 0.25, "cooling_period": 40,
+    "known_ath": 122.23, "known_ath_date": "2026-01-12",
+}
+
 # ============================================================================
 # PRICING FUNCTIONS
 # ============================================================================
@@ -208,6 +227,67 @@ def lookup_hist_price(hist_prices, symbol, target_date):
     return None
 
 
+def norm_pdf(x):
+    """Standard normal probability density function."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def bs_put_greeks(spot, strike, dte, iv, rate=0.045):
+    """Full Black-Scholes Greeks for a put option."""
+    if dte <= 0:
+        delta = -1.0 if spot < strike else 0.0
+        return {"delta": delta, "gamma": 0, "theta": 0, "vega": 0, "iv": iv}
+    t = dte / 365.0
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * iv**2) * t) / (iv * sqrt_t)
+    d2 = d1 - iv * sqrt_t
+    delta = norm_cdf(d1) - 1.0
+    gamma = norm_pdf(d1) / (spot * iv * sqrt_t)
+    theta = (-(spot * norm_pdf(d1) * iv) / (2 * sqrt_t)
+             + rate * strike * math.exp(-rate * t) * norm_cdf(-d2)) / 365.0
+    vega = spot * norm_pdf(d1) * sqrt_t / 100.0
+    return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "iv": iv}
+
+
+def get_thetadata_greeks(root, expiration, strike, right, query_date):
+    """Fetch Greeks from ThetaData Terminal. Returns dict or None on failure."""
+    try:
+        sys.path.insert(0, "C:/Users/Admin/Trading/repos/backtest-infrastructure")
+        from thetadata_client import ThetaDataClient
+        client = ThetaDataClient()
+        if not client.connect():
+            return None
+        results = client.get_option_greeks(
+            root=root, expiration=expiration, strike=float(strike),
+            right=right, start=query_date, end=query_date
+        )
+        if results:
+            return results[-1]
+    except Exception as e:
+        print(f"ThetaData Greeks error: {e}")
+    return None
+
+
+def get_tsla_iv_from_yfinance():
+    """Get TSLA ATM implied volatility from yfinance. Default 0.55 if fails."""
+    try:
+        tk = yf.Ticker("TSLA")
+        exps = tk.options
+        if exps:
+            chain = tk.option_chain(exps[0])
+            puts = chain.puts
+            spot = tk.history(period="5d")["Close"].iloc[-1]
+            atm_idx = (puts["strike"] - spot).abs().idxmin()
+            iv = puts.loc[atm_idx, "impliedVolatility"]
+            if iv and iv > 0:
+                print(f"TSLA ATM IV from yfinance: {iv:.1%}")
+                return float(iv)
+    except Exception as e:
+        print(f"TSLA yfinance IV error: {e}")
+    print("Using default TSLA IV: 55%")
+    return 0.55
+
+
 # ============================================================================
 # GET LIVE DATA
 # ============================================================================
@@ -258,6 +338,16 @@ def get_styles():
         "pcs_title_fill": PatternFill(start_color="4A2545", end_color="4A2545", fill_type="solid"),
         "pcs_header_fill": PatternFill(start_color="7B4F7B", end_color="7B4F7B", fill_type="solid"),
         "pcs_section_font": Font(name="Calibri", size=12, bold=True, color="4A2545"),
+        # Bear spread (maroon)
+        "bear_title_fill": PatternFill(start_color="7B2020", end_color="7B2020", fill_type="solid"),
+        "bear_header_fill": PatternFill(start_color="A03030", end_color="A03030", fill_type="solid"),
+        "bear_section_font": Font(name="Calibri", size=12, bold=True, color="7B2020"),
+        # UPRO long (dark green)
+        "upro_title_fill": PatternFill(start_color="1B5E20", end_color="1B5E20", fill_type="solid"),
+        "upro_header_fill": PatternFill(start_color="2E7D32", end_color="2E7D32", fill_type="solid"),
+        "upro_section_font": Font(name="Calibri", size=12, bold=True, color="1B5E20"),
+        # Signal fills
+        "yellow_fill": PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid"),
     }
 
 
@@ -1037,7 +1127,476 @@ def build_pcs_sheet(ws, spy_price, today):
 
 
 # ============================================================================
-# MAIN: BUILD WORKBOOK WITH BOTH SHEETS
+# SHEET 3: TSLA BEAR PUT DEBIT SPREAD
+# ============================================================================
+
+def build_tsla_spread_sheet(ws, today):
+    s = get_styles()
+    t = TSLA_SPREAD
+    tsla_price = get_price("TSLA", 250.0)
+    exp_date = datetime.strptime(t["expiration"], "%Y-%m-%d").date()
+    dte = (exp_date - today).days
+
+    # Spread math
+    spread_width = t["long_strike"] - t["short_strike"]  # 50
+    max_profit = (spread_width - t["net_debit"]) * t["long_qty"] * 100  # $37,600
+    max_loss = t["net_debit"] * t["long_qty"] * 100  # $12,400
+    breakeven = t["long_strike"] - t["net_debit"]  # $287.60
+    total_cost = t["net_debit"] * t["long_qty"] * 100
+
+    # Get IV for BS pricing
+    iv = get_tsla_iv_from_yfinance()
+
+    # Current spread value via BS
+    long_put_val = bs_put_price(tsla_price, t["long_strike"], dte, iv)
+    short_put_val = bs_put_price(tsla_price, t["short_strike"], dte, iv)
+    spread_value = long_put_val - short_put_val
+    current_value = spread_value * t["long_qty"] * 100
+    pnl = current_value - total_cost
+    pnl_pct = pnl / total_cost if total_cost > 0 else 0
+
+    # ========================================================================
+    # TITLE
+    # ========================================================================
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
+    cell = ws.cell(row=row, column=1,
+                   value="TSLA Bear Put Debit Spread -- Position Tracker")
+    cell.font = s["title_font"]
+    cell.fill = s["bear_title_fill"]
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 30
+
+    row = 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
+    cell = ws.cell(row=row, column=1,
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  "
+                         f"TSLA: ${tsla_price:.2f}  |  Account: {t['account']}")
+    cell.font = Font(name="Calibri", size=10, italic=True, color="7B2020")
+    cell.alignment = Alignment(horizontal="center")
+
+    # ========================================================================
+    # STRATEGY INFO
+    # ========================================================================
+    row = 4
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    cell = ws.cell(row=row, column=1, value="Strategy Info")
+    cell.font = s["bear_section_font"]
+
+    info = [
+        ("Structure", t["structure"]),
+        ("Long Leg", f"{t['long_qty']}x TSLA ${t['long_strike']}P @ ${t['long_entry_price']:.2f}"),
+        ("Short Leg", f"{t['short_qty']}x TSLA ${t['short_strike']}P @ ${t['short_entry_price']:.2f}"),
+        ("Spread Width", f"${spread_width:.2f}"),
+        ("Net Debit", f"${t['net_debit']:.2f}/share  (${total_cost:,.0f} total)"),
+        ("Max Profit", f"${max_profit:,.0f}  (at TSLA <= ${t['short_strike']})"),
+        ("Max Loss", f"${max_loss:,.0f}  (at TSLA >= ${t['long_strike']})"),
+        ("Breakeven", f"${breakeven:.2f}"),
+    ]
+
+    row += 1
+    for label, value in info:
+        c1 = ws.cell(row=row, column=1, value=label)
+        c2 = ws.cell(row=row, column=2, value=value)
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2.font = s["data_font"]
+        c2.fill = s["light_gray_fill"]
+        c2.border = s["thin_border"]
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
+        row += 1
+
+    # ========================================================================
+    # POSITION TABLE
+    # ========================================================================
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
+    cell = ws.cell(row=row, column=1, value="Position Detail")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    headers = [
+        "Entry Date", "Expiration", "DTE",
+        "Long Leg", "Short Leg", "Net Debit",
+        "TSLA @ Entry", "TSLA Current",
+        "Spread Value", "Position Value",
+        "P&L ($)", "P&L (%)",
+    ]
+    header_row = row
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=col_idx, value=h)
+        cell.font = s["header_font"]
+        cell.fill = s["bear_header_fill"]
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = s["thin_border"]
+    ws.row_dimensions[row].height = 30
+
+    row += 1
+    values = [
+        t["entry_date"], t["expiration"], dte,
+        f"${t['long_strike']}P x{t['long_qty']}", f"${t['short_strike']}P x{t['short_qty']}",
+        t["net_debit"],
+        t["tsla_at_entry"], tsla_price,
+        spread_value, current_value,
+        pnl, pnl_pct,
+    ]
+    for col_idx, val in enumerate(values, 1):
+        cell = ws.cell(row=row, column=col_idx, value=val)
+        cell.font = s["data_font"]
+        cell.border = s["thin_border"]
+        cell.alignment = Alignment(horizontal="center")
+
+    # Number formats
+    for c in [6, 9]:
+        ws.cell(row=row, column=c).number_format = s["money_fmt"]
+    for c in [7, 8, 10, 11]:
+        ws.cell(row=row, column=c).number_format = s["money_whole_fmt"]
+    ws.cell(row=row, column=12).number_format = s["pct_fmt"]
+    ws.cell(row=row, column=3).number_format = s["int_fmt"]
+
+    pnl_cell = ws.cell(row=row, column=11)
+    pnl_pct_cell = ws.cell(row=row, column=12)
+    if pnl >= 0:
+        pnl_cell.fill = s["green_fill"]
+        pnl_pct_cell.fill = s["green_fill"]
+    else:
+        pnl_cell.fill = s["red_fill"]
+        pnl_pct_cell.fill = s["red_fill"]
+
+    # ========================================================================
+    # GREEKS TABLE
+    # ========================================================================
+    row += 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    cell = ws.cell(row=row, column=1, value="Net Greeks (x10 contracts x100 multiplier)")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    greek_headers = ["Date", "Net Delta", "Net Gamma", "Net Theta ($/day)",
+                     "Net Vega", "IV (Long)", "IV (Short)", "Source"]
+    for col_idx, h in enumerate(greek_headers, 1):
+        cell = ws.cell(row=row, column=col_idx, value=h)
+        cell.font = s["header_font"]
+        cell.fill = s["bear_header_fill"]
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = s["thin_border"]
+
+    multiplier = t["long_qty"] * 100
+
+    # Inception Greeks — try ThetaData first
+    row += 1
+    entry_greeks = get_thetadata_greeks("TSLA", t["expiration"], t["long_strike"], "P", t["entry_date"])
+    entry_short_greeks = get_thetadata_greeks("TSLA", t["expiration"], t["short_strike"], "P", t["entry_date"])
+
+    if entry_greeks and entry_short_greeks:
+        net_delta = (entry_greeks["delta"] - entry_short_greeks["delta"]) * multiplier
+        net_gamma = (entry_greeks["gamma"] - entry_short_greeks["gamma"]) * multiplier
+        net_theta = (entry_greeks["theta"] - entry_short_greeks["theta"]) * multiplier
+        net_vega = (entry_greeks["vega"] - entry_short_greeks["vega"]) * multiplier
+        iv_long = entry_greeks["iv"]
+        iv_short = entry_short_greeks["iv"]
+        source = "ThetaData"
+    else:
+        # BS fallback using entry price
+        entry_dte = (exp_date - datetime.strptime(t["entry_date"], "%Y-%m-%d").date()).days
+        lg = bs_put_greeks(t["tsla_at_entry"], t["long_strike"], entry_dte, iv)
+        sg = bs_put_greeks(t["tsla_at_entry"], t["short_strike"], entry_dte, iv)
+        net_delta = (lg["delta"] - sg["delta"]) * multiplier
+        net_gamma = (lg["gamma"] - sg["gamma"]) * multiplier
+        net_theta = (lg["theta"] - sg["theta"]) * multiplier
+        net_vega = (lg["vega"] - sg["vega"]) * multiplier
+        iv_long = iv
+        iv_short = iv
+        source = "BS estimate"
+
+    inception_vals = [t["entry_date"], net_delta, net_gamma, net_theta,
+                      net_vega, iv_long, iv_short, source]
+    for col_idx, val in enumerate(inception_vals, 1):
+        cell = ws.cell(row=row, column=col_idx, value=val)
+        cell.font = s["data_font"]
+        cell.border = s["thin_border"]
+        cell.alignment = Alignment(horizontal="center")
+        cell.fill = s["light_gray_fill"]
+    for c in [2, 3]:
+        ws.cell(row=row, column=c).number_format = '0.0'
+    ws.cell(row=row, column=4).number_format = '$#,##0.00'
+    ws.cell(row=row, column=5).number_format = '0.00'
+    for c in [6, 7]:
+        ws.cell(row=row, column=c).number_format = '0.1%'
+
+    # Current Greeks
+    row += 1
+    cur_long_greeks = get_thetadata_greeks("TSLA", t["expiration"], t["long_strike"], "P",
+                                           today.strftime("%Y-%m-%d"))
+    cur_short_greeks = get_thetadata_greeks("TSLA", t["expiration"], t["short_strike"], "P",
+                                            today.strftime("%Y-%m-%d"))
+
+    if cur_long_greeks and cur_short_greeks:
+        net_delta = (cur_long_greeks["delta"] - cur_short_greeks["delta"]) * multiplier
+        net_gamma = (cur_long_greeks["gamma"] - cur_short_greeks["gamma"]) * multiplier
+        net_theta = (cur_long_greeks["theta"] - cur_short_greeks["theta"]) * multiplier
+        net_vega = (cur_long_greeks["vega"] - cur_short_greeks["vega"]) * multiplier
+        iv_long = cur_long_greeks["iv"]
+        iv_short = cur_short_greeks["iv"]
+        source = "ThetaData"
+    else:
+        lg = bs_put_greeks(tsla_price, t["long_strike"], dte, iv)
+        sg = bs_put_greeks(tsla_price, t["short_strike"], dte, iv)
+        net_delta = (lg["delta"] - sg["delta"]) * multiplier
+        net_gamma = (lg["gamma"] - sg["gamma"]) * multiplier
+        net_theta = (lg["theta"] - sg["theta"]) * multiplier
+        net_vega = (lg["vega"] - sg["vega"]) * multiplier
+        iv_long = iv
+        iv_short = iv
+        source = "BS estimate"
+
+    current_vals = [today.strftime("%Y-%m-%d"), net_delta, net_gamma, net_theta,
+                    net_vega, iv_long, iv_short, source]
+    for col_idx, val in enumerate(current_vals, 1):
+        cell = ws.cell(row=row, column=col_idx, value=val)
+        cell.font = s["data_font"]
+        cell.border = s["thin_border"]
+        cell.alignment = Alignment(horizontal="center")
+    for c in [2, 3]:
+        ws.cell(row=row, column=c).number_format = '0.0'
+    ws.cell(row=row, column=4).number_format = '$#,##0.00'
+    ws.cell(row=row, column=5).number_format = '0.00'
+    for c in [6, 7]:
+        ws.cell(row=row, column=c).number_format = '0.1%'
+
+    # ========================================================================
+    # P&L SUMMARY
+    # ========================================================================
+    row += 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    cell = ws.cell(row=row, column=1, value="P&L Summary")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    dist_to_be = tsla_price - breakeven
+    dist_to_be_pct = dist_to_be / tsla_price if tsla_price > 0 else 0
+    dist_to_max = tsla_price - t["short_strike"]
+    dist_to_max_pct = dist_to_max / tsla_price if tsla_price > 0 else 0
+
+    summary = [
+        ("Entry Cost", f"${total_cost:,.0f}"),
+        ("Current Value", f"${current_value:,.0f}"),
+        ("P&L ($)", f"${pnl:+,.0f}"),
+        ("P&L (%)", f"{pnl_pct:+.1%}"),
+        ("Distance to Breakeven ($287.60)", f"${dist_to_be:+,.2f}  ({dist_to_be_pct:+.1%})"),
+        ("Distance to Max Profit ($250)", f"${dist_to_max:+,.2f}  ({dist_to_max_pct:+.1%})"),
+    ]
+
+    for label, value in summary:
+        c1 = ws.cell(row=row, column=1, value=label)
+        c2 = ws.cell(row=row, column=2, value=value)
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2.font = s["data_font"]
+        c2.border = s["thin_border"]
+        c2.alignment = Alignment(horizontal="right")
+        if "P&L ($)" == label:
+            c2.fill = s["green_fill"] if pnl >= 0 else s["red_fill"]
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=4)
+        row += 1
+
+    # Column widths
+    col_widths = {1: 16, 2: 16, 3: 8, 4: 16, 5: 16, 6: 12,
+                  7: 14, 8: 14, 9: 14, 10: 14, 11: 14, 12: 12}
+    for col, width in col_widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ws.freeze_panes = f"A{header_row + 1}"
+
+    return total_cost, current_value, pnl, pnl_pct
+
+
+# ============================================================================
+# SHEET 4: UPRO LONG — DD25%/COOL40
+# ============================================================================
+
+def build_upro_sheet(ws, today):
+    s = get_styles()
+    u = UPRO_POSITION
+    upro_price = get_price("UPRO", 100.0)
+    cost_basis = u["shares"] * u["entry_price"]
+    current_value = u["shares"] * upro_price
+    pnl = current_value - cost_basis
+    pnl_pct = pnl / cost_basis if cost_basis > 0 else 0
+
+    # ATH calculation — check yfinance history against known ATH
+    ath = u["known_ath"]
+    ath_date = u["known_ath_date"]
+    try:
+        tk = yf.Ticker("UPRO")
+        hist = tk.history(period="max")
+        if not hist.empty:
+            yf_max = float(hist["Close"].max())
+            if yf_max > ath:
+                ath = yf_max
+                ath_date = hist["Close"].idxmax()
+                if hasattr(ath_date, "strftime"):
+                    ath_date = ath_date.strftime("%Y-%m-%d")
+                else:
+                    ath_date = str(ath_date)[:10]
+            print(f"UPRO ATH: ${ath:.2f} ({ath_date})")
+    except Exception as e:
+        print(f"UPRO ATH fetch error: {e}")
+
+    drawdown = (upro_price / ath) - 1.0
+    exit_trigger = ath * (1.0 - u["dd_threshold"])
+    dist_to_exit = upro_price - exit_trigger
+    dist_to_exit_pct = dist_to_exit / upro_price if upro_price > 0 else 0
+    status = "EXIT SIGNAL" if upro_price <= exit_trigger else "IN"
+
+    # ========================================================================
+    # TITLE
+    # ========================================================================
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    cell = ws.cell(row=row, column=1,
+                   value="UPRO Long Position -- DD25%/Cool40 Strategy")
+    cell.font = s["title_font"]
+    cell.fill = s["upro_title_fill"]
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 30
+
+    row = 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    cell = ws.cell(row=row, column=1,
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  "
+                         f"UPRO: ${upro_price:.2f}  |  Account: {u['account']}")
+    cell.font = Font(name="Calibri", size=10, italic=True, color="1B5E20")
+    cell.alignment = Alignment(horizontal="center")
+
+    # ========================================================================
+    # STRATEGY RULES
+    # ========================================================================
+    row = 4
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    cell = ws.cell(row=row, column=1, value="DD25%/Cool40 Strategy Rules")
+    cell.font = s["upro_section_font"]
+
+    rules = [
+        ("Instrument", "UPRO (3x leveraged S&P 500)"),
+        ("Exit Signal", f"UPRO closes >= {u['dd_threshold']:.0%} below all-time high"),
+        ("Cooling Period", f"{u['cooling_period']} trading days out of market after exit"),
+        ("Re-entry", "Buy UPRO after cooling period expires"),
+        ("Note", "COOLING state requires manual update to UPRO_POSITION dict"),
+    ]
+
+    row += 1
+    for label, value in rules:
+        c1 = ws.cell(row=row, column=1, value=label)
+        c2 = ws.cell(row=row, column=2, value=value)
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2.font = s["data_font"]
+        c2.fill = s["light_gray_fill"]
+        c2.border = s["thin_border"]
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=6)
+        row += 1
+
+    # ========================================================================
+    # POSITION TABLE
+    # ========================================================================
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    cell = ws.cell(row=row, column=1, value="Position Detail")
+    cell.font = s["upro_section_font"]
+    row += 1
+
+    headers = ["Shares", "Entry Date", "Entry Price", "Cost Basis",
+               "Current Price", "Current Value", "P&L ($)", "P&L (%)"]
+    header_row = row
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=col_idx, value=h)
+        cell.font = s["header_font"]
+        cell.fill = s["upro_header_fill"]
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = s["thin_border"]
+    ws.row_dimensions[row].height = 30
+
+    row += 1
+    values = [u["shares"], u["entry_date"], u["entry_price"], cost_basis,
+              upro_price, current_value, pnl, pnl_pct]
+    for col_idx, val in enumerate(values, 1):
+        cell = ws.cell(row=row, column=col_idx, value=val)
+        cell.font = s["data_font"]
+        cell.border = s["thin_border"]
+        cell.alignment = Alignment(horizontal="center")
+
+    ws.cell(row=row, column=1).number_format = '#,##0'
+    for c in [3]:
+        ws.cell(row=row, column=c).number_format = s["money_fmt"]
+    for c in [4, 5, 6, 7]:
+        ws.cell(row=row, column=c).number_format = s["money_whole_fmt"]
+    ws.cell(row=row, column=8).number_format = s["pct_fmt"]
+
+    pnl_cell = ws.cell(row=row, column=7)
+    pnl_pct_cell = ws.cell(row=row, column=8)
+    if pnl >= 0:
+        pnl_cell.fill = s["green_fill"]
+        pnl_pct_cell.fill = s["green_fill"]
+    else:
+        pnl_cell.fill = s["red_fill"]
+        pnl_pct_cell.fill = s["red_fill"]
+
+    # ========================================================================
+    # DD25%/COOL40 MONITORING
+    # ========================================================================
+    row += 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    cell = ws.cell(row=row, column=1, value="DD25%/Cool40 Monitoring")
+    cell.font = s["upro_section_font"]
+    row += 1
+
+    monitor_data = [
+        ("All-Time High", f"${ath:.2f}"),
+        ("ATH Date", str(ath_date)),
+        ("Current Drawdown", f"{drawdown:+.1%}"),
+        ("Exit Trigger Level", f"${exit_trigger:.2f}  (ATH x 0.75)"),
+        ("Distance to Exit ($)", f"${dist_to_exit:+,.2f}"),
+        ("Distance to Exit (%)", f"{dist_to_exit_pct:+.1%}"),
+        ("Status", status),
+    ]
+
+    for label, value in monitor_data:
+        c1 = ws.cell(row=row, column=1, value=label)
+        c2 = ws.cell(row=row, column=2, value=value)
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2.font = s["data_font"]
+        c2.border = s["thin_border"]
+        c2.alignment = Alignment(horizontal="right")
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=4)
+
+        if label == "Status":
+            c2.font = Font(name="Calibri", size=12, bold=True,
+                           color="006100" if status == "IN" else "9C0006")
+            c2.fill = s["green_fill"] if status == "IN" else s["red_fill"]
+        if label == "Current Drawdown" and drawdown <= -0.20:
+            c2.fill = s["yellow_fill"]
+            c2.font = Font(name="Calibri", size=10, bold=True, color="9C6500")
+
+        row += 1
+
+    # Column widths
+    col_widths = {1: 20, 2: 16, 3: 14, 4: 14, 5: 14, 6: 14, 7: 14, 8: 12, 9: 12, 10: 12}
+    for col, width in col_widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ws.freeze_panes = f"A{header_row + 1}"
+
+    return u["shares"], cost_basis, current_value, pnl, status
+
+
+# ============================================================================
+# MAIN: BUILD WORKBOOK WITH ALL SHEETS
 # ============================================================================
 
 def build_spreadsheet(output_path):
@@ -1064,16 +1623,24 @@ def build_spreadsheet(output_path):
     ws2 = wb.create_sheet("PCS Paper Trades")
     pcs_results = build_pcs_sheet(ws2, spy_price, today)
 
+    # Sheet 3: TSLA Bear Put Spread
+    ws3 = wb.create_sheet("TSLA Bear Put Spread")
+    tsla_results = build_tsla_spread_sheet(ws3, today)
+
+    # Sheet 4: UPRO DD25/Cool40
+    ws4 = wb.create_sheet("UPRO DD25-Cool40")
+    upro_results = build_upro_sheet(ws4, today)
+
     wb.save(output_path)
     print(f"\nSaved: {output_path}")
-    return delta_results, pcs_results
+    return delta_results, pcs_results, tsla_results, upro_results
 
 
 if __name__ == "__main__":
     import os
     out_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(out_dir, "position_tracker.xlsx")
-    delta_results, pcs_results = build_spreadsheet(out_path)
+    delta_results, pcs_results, tsla_results, upro_results = build_spreadsheet(out_path)
 
     cost, value, pnl, delta_exp, contracts = delta_results
     print(f"\n--- 80-Delta Calls ---")
@@ -1085,3 +1652,12 @@ if __name__ == "__main__":
     print(f"\n--- PCS Paper Trades ---")
     print(f"Open: {n_open}  |  Contracts: {pcs_contracts}")
     print(f"Credit: ${pcs_credit:,.0f}  |  P&L: ${pcs_pnl:+,.0f}")
+
+    tsla_cost, tsla_val, tsla_pnl, tsla_pct = tsla_results
+    print(f"\n--- TSLA Bear Put Spread ---")
+    print(f"Cost: ${tsla_cost:,.0f}  |  Value: ${tsla_val:,.0f}  |  P&L: ${tsla_pnl:+,.0f} ({tsla_pct:+.1%})")
+
+    upro_shares, upro_cost, upro_val, upro_pnl, upro_status = upro_results
+    print(f"\n--- UPRO DD25/Cool40 ---")
+    print(f"Shares: {upro_shares:,}  |  Cost: ${upro_cost:,.0f}  |  Value: ${upro_val:,.0f}  |  P&L: ${upro_pnl:+,.0f}")
+    print(f"Status: {upro_status}")
