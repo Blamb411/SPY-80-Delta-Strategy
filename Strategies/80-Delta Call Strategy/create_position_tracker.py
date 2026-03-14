@@ -1,9 +1,10 @@
 """
-Generate position_tracker.xlsx with four sheets:
+Generate position_tracker.xlsx with five sheets:
   Sheet 1: SPY 80-Delta Call Strategy
   Sheet 2: Put Credit Spreads (PCS) Paper Trades
   Sheet 3: TSLA Bear Put Debit Spread
   Sheet 4: UPRO Long Position (DD25%/Cool40)
+  Sheet 5: Bear Put Spread Candidates
 
 Pulls live prices from yfinance, PCS trades from put_spread_paper.db,
 Greeks from ThetaData (with BS fallback).
@@ -126,6 +127,51 @@ UPRO_POSITION = {
     "strategy": "DD25%/Cool40", "dd_threshold": 0.25, "cooling_period": 40,
     "known_ath": 122.23, "known_ath_date": "2026-01-12",
 }
+
+# Bear put spread candidates — watchlist (not yet entered)
+# Update status to "ENTERED" and fill in entry fields once trades are placed
+BEAR_SPREAD_CANDIDATES = [
+    {
+        "symbol": "MDLZ", "name": "Mondelez International",
+        "long_strike": 55, "short_strike": 27.5, "expiration": "2027-01-15",
+        "screener_score": 66.3, "rr_ratio": 7.09, "sector": "Consumer Staples",
+        "thesis": "Cocoa hedge trap, volume decline 4.8%, FY26 guidance below Street",
+        "status": "WATCHLIST",  # WATCHLIST / ENTERED / CLOSED
+        "qty": 0, "net_debit": 0, "entry_date": "",
+    },
+    {
+        "symbol": "KHC", "name": "Kraft Heinz",
+        "long_strike": 22.5, "short_strike": 12.5, "expiration": "2027-01-15",
+        "screener_score": 65.5, "rr_ratio": 4.21, "sector": "Consumer Staples",
+        "thesis": "Revenue declining, split paused, FY26 EPS $2.03 vs Street $2.68",
+        "status": "WATCHLIST",
+        "qty": 0, "net_debit": 0, "entry_date": "",
+    },
+    {
+        "symbol": "AIG", "name": "American International Group",
+        "long_strike": 77.5, "short_strike": 37.5, "expiration": "2027-01-15",
+        "screener_score": 65.9, "rr_ratio": 5.32, "sector": "Financials",
+        "thesis": "CEO transition, underwriting headwinds, cat exposure",
+        "status": "WATCHLIST",
+        "qty": 0, "net_debit": 0, "entry_date": "",
+    },
+    {
+        "symbol": "SBUX", "name": "Starbucks",
+        "long_strike": 100, "short_strike": 50, "expiration": "2027-01-15",
+        "screener_score": 64.4, "rr_ratio": 3.96, "sector": "Consumer Discretionary",
+        "thesis": "Consumer weakness, high FwdPE 44x, turnaround uncertainty",
+        "status": "WATCHLIST",
+        "qty": 0, "net_debit": 0, "entry_date": "",
+    },
+    {
+        "symbol": "CCI", "name": "Crown Castle",
+        "long_strike": 87.5, "short_strike": 45, "expiration": "2027-01-15",
+        "screener_score": 73.6, "rr_ratio": 3.43, "sector": "Real Estate",
+        "thesis": "REIT rate-sensitive, GFV=9, tower growth slowing",
+        "status": "WATCHLIST",
+        "qty": 0, "net_debit": 0, "entry_date": "",
+    },
+]
 
 # ============================================================================
 # PRICING FUNCTIONS
@@ -1596,6 +1642,198 @@ def build_upro_sheet(ws, today):
 
 
 # ============================================================================
+# SHEET 5: BEAR PUT SPREAD CANDIDATES
+# ============================================================================
+
+def build_bear_candidates_sheet(ws, today):
+    """Build a watchlist/tracker sheet for bear put spread candidates."""
+    s = get_styles()
+
+    # Fetch live prices for all candidates
+    symbols = list({c["symbol"] for c in BEAR_SPREAD_CANDIDATES})
+    prices = {}
+    for sym in symbols:
+        prices[sym] = get_price(sym, 0.0)
+
+    # Get IV for BS pricing
+    ivs = {}
+    for sym in symbols:
+        try:
+            tk = yf.Ticker(sym)
+            exps = tk.options
+            if exps:
+                chain = tk.option_chain(exps[0])
+                puts = chain.puts
+                spot = prices[sym]
+                if spot > 0 and not puts.empty:
+                    atm_idx = (puts["strike"] - spot).abs().idxmin()
+                    iv_val = puts.loc[atm_idx, "impliedVolatility"]
+                    if iv_val and iv_val > 0:
+                        ivs[sym] = float(iv_val)
+                        continue
+        except Exception:
+            pass
+        ivs[sym] = 0.30  # fallback
+
+    # ── TITLE ──
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=14)
+    cell = ws.cell(row=row, column=1, value="Bear Put Spread Candidates -- Watchlist")
+    cell.font = s["title_font"]
+    cell.fill = s["bear_title_fill"]
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 30
+
+    row = 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=14)
+    cell = ws.cell(row=row, column=1,
+                   value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  "
+                         f"Screened: 2026-03-11  |  Source: IC-derived scoring + GuruFocus")
+    cell.font = Font(name="Calibri", size=10, italic=True, color="7B2020")
+    cell.alignment = Alignment(horizontal="center")
+
+    # ── SUMMARY TABLE ──
+    row = 4
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=14)
+    cell = ws.cell(row=row, column=1, value="Candidate Overview")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    headers = [
+        "Symbol", "Name", "Sector", "Status",
+        "Long Put", "Short Put", "Exp", "Score", "R:R",
+        "Current Price", "Spread Value", "Est. Debit",
+        "Max Loss/Ct", "Max Profit/Ct",
+    ]
+    header_row = row
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=col_idx, value=h)
+        cell.font = s["header_font"]
+        cell.fill = s["bear_header_fill"]
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = s["thin_border"]
+    ws.row_dimensions[row].height = 30
+
+    total_est_risk = 0
+
+    for cand in BEAR_SPREAD_CANDIDATES:
+        row += 1
+        sym = cand["symbol"]
+        spot = prices.get(sym, 0)
+        iv = ivs.get(sym, 0.30)
+        exp_date = datetime.strptime(cand["expiration"], "%Y-%m-%d").date()
+        dte = (exp_date - today).days
+
+        # BS spread value
+        if spot > 0 and dte > 0:
+            long_val = bs_put_price(spot, cand["long_strike"], dte, iv)
+            short_val = bs_put_price(spot, cand["short_strike"], dte, iv)
+            spread_val = long_val - short_val
+        else:
+            spread_val = 0
+
+        width = cand["long_strike"] - cand["short_strike"]
+        est_debit = spread_val
+        max_loss = est_debit * 100
+        max_profit = (width - est_debit) * 100
+
+        if cand["status"] == "ENTERED" and cand["net_debit"] > 0:
+            est_debit = cand["net_debit"]
+            max_loss = cand["net_debit"] * cand["qty"] * 100
+            max_profit = (width - cand["net_debit"]) * cand["qty"] * 100
+
+        total_est_risk += max_loss
+
+        values = [
+            sym, cand["name"], cand["sector"], cand["status"],
+            f"${cand['long_strike']}P", f"${cand['short_strike']}P",
+            cand["expiration"], cand["screener_score"], cand["rr_ratio"],
+            spot, spread_val, est_debit,
+            max_loss, max_profit,
+        ]
+
+        for col_idx, val in enumerate(values, 1):
+            cell = ws.cell(row=row, column=col_idx, value=val)
+            cell.font = s["data_font"]
+            cell.border = s["thin_border"]
+            cell.alignment = Alignment(horizontal="center")
+
+        # Number formats
+        ws.cell(row=row, column=8).number_format = '0.0'
+        ws.cell(row=row, column=9).number_format = '0.00'
+        ws.cell(row=row, column=10).number_format = '$#,##0.00'
+        ws.cell(row=row, column=11).number_format = '#,##0.00'
+        ws.cell(row=row, column=12).number_format = '#,##0.00'
+        ws.cell(row=row, column=13).number_format = '$#,##0'
+        ws.cell(row=row, column=14).number_format = '$#,##0'
+
+        # Status coloring
+        status_cell = ws.cell(row=row, column=4)
+        if cand["status"] == "ENTERED":
+            status_cell.fill = s["green_fill"]
+            status_cell.font = Font(name="Calibri", size=10, bold=True, color="006100")
+        elif cand["status"] == "WATCHLIST":
+            status_cell.fill = s["yellow_fill"]
+            status_cell.font = Font(name="Calibri", size=10, bold=True, color="9C6500")
+
+    # ── THESIS SECTION ──
+    row += 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=14)
+    cell = ws.cell(row=row, column=1, value="Bear Thesis Summary")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    for cand in BEAR_SPREAD_CANDIDATES:
+        c1 = ws.cell(row=row, column=1, value=cand["symbol"])
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2 = ws.cell(row=row, column=2, value=cand["thesis"])
+        c2.font = s["data_font"]
+        c2.border = s["thin_border"]
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=14)
+        row += 1
+
+    # ── PORTFOLIO RISK SUMMARY ──
+    row += 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    cell = ws.cell(row=row, column=1, value="Portfolio Risk Summary")
+    cell.font = s["bear_section_font"]
+    row += 1
+
+    # Include TSLA existing position
+    tsla_risk = TSLA_SPREAD["net_debit"] * TSLA_SPREAD["long_qty"] * 100
+
+    risk_items = [
+        ("TSLA Bear Put Spread (existing)", f"${tsla_risk:,.0f}"),
+        ("Candidates (est. 1 contract each)", f"${total_est_risk:,.0f}"),
+        ("Total Bear Overlay Risk", f"${tsla_risk + total_est_risk:,.0f}"),
+    ]
+
+    for label, value in risk_items:
+        c1 = ws.cell(row=row, column=1, value=label)
+        c2 = ws.cell(row=row, column=2, value=value)
+        c1.font = Font(name="Calibri", size=10, bold=True)
+        c1.fill = s["light_gray_fill"]
+        c1.border = s["thin_border"]
+        c2.font = s["data_font"]
+        c2.border = s["thin_border"]
+        c2.alignment = Alignment(horizontal="right")
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=4)
+        row += 1
+
+    # Column widths
+    col_widths = {1: 10, 2: 24, 3: 20, 4: 12, 5: 10, 6: 10, 7: 12,
+                  8: 8, 9: 8, 10: 14, 11: 14, 12: 12, 13: 14, 14: 14}
+    for col, width in col_widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ws.freeze_panes = f"A{header_row + 1}"
+
+    return len(BEAR_SPREAD_CANDIDATES), total_est_risk
+
+
+# ============================================================================
 # MAIN: BUILD WORKBOOK WITH ALL SHEETS
 # ============================================================================
 
@@ -1631,16 +1869,20 @@ def build_spreadsheet(output_path):
     ws4 = wb.create_sheet("UPRO DD25-Cool40")
     upro_results = build_upro_sheet(ws4, today)
 
+    # Sheet 5: Bear Put Spread Candidates
+    ws5 = wb.create_sheet("Bear Spread Candidates")
+    bear_results = build_bear_candidates_sheet(ws5, today)
+
     wb.save(output_path)
     print(f"\nSaved: {output_path}")
-    return delta_results, pcs_results, tsla_results, upro_results
+    return delta_results, pcs_results, tsla_results, upro_results, bear_results
 
 
 if __name__ == "__main__":
     import os
     out_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(out_dir, "position_tracker.xlsx")
-    delta_results, pcs_results, tsla_results, upro_results = build_spreadsheet(out_path)
+    delta_results, pcs_results, tsla_results, upro_results, bear_results = build_spreadsheet(out_path)
 
     cost, value, pnl, delta_exp, contracts = delta_results
     print(f"\n--- 80-Delta Calls ---")
@@ -1661,3 +1903,7 @@ if __name__ == "__main__":
     print(f"\n--- UPRO DD25/Cool40 ---")
     print(f"Shares: {upro_shares:,}  |  Cost: ${upro_cost:,.0f}  |  Value: ${upro_val:,.0f}  |  P&L: ${upro_pnl:+,.0f}")
     print(f"Status: {upro_status}")
+
+    n_candidates, est_risk = bear_results
+    print(f"\n--- Bear Spread Candidates ---")
+    print(f"Candidates: {n_candidates}  |  Est. Risk (1 ct each): ${est_risk:,.0f}")
