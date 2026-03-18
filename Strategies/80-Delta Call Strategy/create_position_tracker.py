@@ -1,11 +1,10 @@
 """
-Generate position_tracker.xlsx with six sheets:
+Generate position_tracker.xlsx with five sheets:
   Sheet 1: SPY 80-Delta Call Strategy
   Sheet 2: Put Credit Spreads (PCS) Paper Trades
   Sheet 3: Put Credit Spreads (PCS) Live Trades
   Sheet 4: TSLA Bear Put Debit Spread
   Sheet 5: UPRO Long Position (DD25%/Cool40)
-  Sheet 6: Bear Put Spread Candidates
 
 Pulls live prices from yfinance, PCS trades from put_spread_paper.db
 and put_spread_live.db, Greeks from ThetaData (with BS fallback).
@@ -2161,21 +2160,17 @@ def build_spreadsheet(output_path):
     ws5 = wb.create_sheet("UPRO DD25-Cool40")
     upro_results = build_upro_sheet(ws5, today)
 
-    # Sheet 6: Bear Put Spread Candidates
-    ws6 = wb.create_sheet("Bear Spread Candidates")
-    bear_results = build_bear_candidates_sheet(ws6, today)
-
     wb.save(output_path)
     print(f"\nSaved: {output_path}")
     return (delta_results, pcs_results, pcs_live_results,
-            tsla_results, upro_results, bear_results)
+            tsla_results, upro_results)
 
 
 if __name__ == "__main__":
     out_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(out_dir, "position_tracker.xlsx")
     (delta_results, pcs_results, pcs_live_results,
-     tsla_results, upro_results, bear_results) = build_spreadsheet(out_path)
+     tsla_results, upro_results) = build_spreadsheet(out_path)
 
     cost, value, pnl, delta_exp, contracts = delta_results
     print(f"\n--- 80-Delta Calls ---")
@@ -2201,7 +2196,3 @@ if __name__ == "__main__":
     print(f"\n--- UPRO DD25/Cool40 ---")
     print(f"Shares: {upro_shares:,}  |  Cost: ${upro_cost:,.0f}  |  Value: ${upro_val:,.0f}  |  P&L: ${upro_pnl:+,.0f}")
     print(f"Status: {upro_status}")
-
-    n_candidates, est_risk = bear_results
-    print(f"\n--- Bear Spread Candidates ---")
-    print(f"Candidates: {n_candidates}  |  Est. Risk (1 ct each): ${est_risk:,.0f}")
