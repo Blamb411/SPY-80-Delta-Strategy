@@ -225,6 +225,21 @@ def run_spy_bh(spy_close, upro_start_date):
     return dates, portfolio_values, m
 
 
+def run_sso_bh(sso_close, upro_start_date):
+    """SSO (2x daily leveraged S&P 500) buy-and-hold from UPRO inception date."""
+    sso = sso_close.loc[sso_close.index >= upro_start_date]
+    prices = sso.values
+    shares = INITIAL_CAPITAL / prices[0]
+    portfolio_values = shares * prices
+    dates = sso.index
+
+    m = compute_metrics(
+        portfolio_values, name="SSO B&H (2x)",
+        num_trades=1, days_invested=len(prices), total_days=len(prices),
+    )
+    return dates, portfolio_values, m
+
+
 def run_synthetic_3x(spy_close, upro_start_date, annual_margin_rate=0.0):
     """Synthetic 3x daily-rebalanced SPY (like UPRO but without expense ratio).
 
@@ -274,9 +289,10 @@ def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
         equity < maintenance_margin * position_value
     where equity = position_value - debt.
 
-    After a margin call the position is liquidated and the simulation
-    continues flat at the remaining equity (which may be zero or negative,
-    floored at zero).
+    On margin call, the broker sells just enough shares to restore equity to
+    30% of position value (slightly above 25% maintenance for a buffer).
+    The simulation continues with fewer shares and reduced debt.  Full
+    liquidation only occurs if equity hits zero (truly wiped out).
 
     Parameters
     ----------
@@ -285,6 +301,8 @@ def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
     maintenance_margin : float
         Reg-T maintenance margin requirement (default 25%).
     """
+    TARGET_RATIO = 0.30  # restore equity to 30% of position value after margin call
+
     spy = spy_close.loc[spy_close.index >= upro_start_date]
     prices = spy.values
     dates = spy.index
@@ -297,13 +315,14 @@ def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
 
     portfolio_values = np.zeros(len(prices))
     portfolio_values[0] = initial_equity
-    margin_called = False
-    margin_call_day = None
+    wiped_out = False
+    margin_call_count = 0
+    first_margin_call_day = None
 
     for i in range(1, len(prices)):
-        if margin_called:
-            # Already liquidated — flat at whatever equity remained
-            portfolio_values[i] = portfolio_values[i - 1]
+        if wiped_out:
+            # Fully liquidated — flat at zero
+            portfolio_values[i] = 0.0
             continue
 
         # Accrue daily interest on the debt
@@ -313,15 +332,33 @@ def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
         position_value = shares * prices[i]
         equity = position_value - debt
 
-        # Check margin call
-        if equity <= 0 or equity < maintenance_margin * position_value:
-            # Forced liquidation: sell everything, repay debt
-            remaining = max(0.0, position_value - debt)
-            portfolio_values[i] = remaining
-            margin_called = True
-            margin_call_day = i
-        else:
-            portfolio_values[i] = equity
+        # Check for wipe-out first
+        if equity <= 0:
+            portfolio_values[i] = 0.0
+            wiped_out = True
+            margin_call_count += 1
+            if first_margin_call_day is None:
+                first_margin_call_day = i
+            continue
+
+        # Check margin call — partial liquidation
+        if equity < maintenance_margin * position_value:
+            margin_call_count += 1
+            if first_margin_call_day is None:
+                first_margin_call_day = i
+
+            # Sell enough shares to restore equity to TARGET_RATIO of position value.
+            # Equity is preserved when selling shares and paying down debt:
+            #   equity = TARGET_RATIO * new_shares * price
+            #   new_shares = equity / (TARGET_RATIO * price)
+            new_shares = equity / (TARGET_RATIO * prices[i])
+            shares_to_sell = shares - new_shares
+            if shares_to_sell > 0:
+                debt_reduction = shares_to_sell * prices[i]
+                shares = new_shares
+                debt -= debt_reduction
+
+        portfolio_values[i] = shares * prices[i] - debt
 
     name = f"Static 3x ({annual_margin_rate:.0%} margin)"
     m = compute_metrics(
@@ -329,12 +366,15 @@ def run_static_3x(spy_close, upro_start_date, annual_margin_rate=0.06,
         num_trades=1, days_invested=len(prices), total_days=len(prices),
     )
     # Attach margin-call info as extra fields
-    if margin_called:
-        m["margin_call_day"] = int(margin_call_day)
-        m["margin_call_date"] = str(dates[margin_call_day].date())
-        m["days_to_margin_call"] = int(margin_call_day)
+    m["margin_call_count"] = margin_call_count
+    m["wiped_out"] = wiped_out
+    if first_margin_call_day is not None:
+        m["margin_call_day"] = int(first_margin_call_day)
+        m["margin_call_date"] = str(dates[first_margin_call_day].date())
+        m["days_to_margin_call"] = int(first_margin_call_day)
     else:
         m["margin_call_day"] = None
+        m["margin_call_date"] = None
 
     return dates, portfolio_values, m
 
@@ -735,13 +775,17 @@ def print_final_comparison(all_best):
 # ======================================================================
 
 def create_charts(benchmark_dates, benchmark_values, benchmark_metrics,
-                  best_strategies, all_results, output_path):
+                  best_strategies, all_results, output_path,
+                  reference_curves=None):
     """
     Create a 2x2 multi-panel chart:
       Top-left:    Portfolio value (log) - UPRO B&H vs best of each strategy
+                   with optional SPY/SSO reference lines
       Top-right:   Drawdown comparison
       Bottom-left: CAGR bar chart for all strategies
       Bottom-right: Risk/return scatter (Max DD vs CAGR)
+
+    reference_curves: list of (label, dates, values) for background reference lines
     """
     print("\nCreating charts...")
 
@@ -757,8 +801,18 @@ def create_charts(benchmark_dates, benchmark_values, benchmark_metrics,
         "#8c564b",  # Composite
     ]
 
+    ref_colors = ["#999999", "#666666"]  # lighter colors for SPY, SSO reference lines
+
     # ---- TOP LEFT: Portfolio Value (log scale) ----
     ax1 = axes[0, 0]
+
+    # Plot reference curves (SPY, SSO) first so they appear behind
+    if reference_curves:
+        for ridx, (rlabel, rdates, rvalues) in enumerate(reference_curves):
+            ax1.semilogy(rdates, rvalues, label=rlabel,
+                         linewidth=1.3, color=ref_colors[ridx % len(ref_colors)],
+                         alpha=0.6, linestyle="--")
+
     ax1.semilogy(benchmark_dates, benchmark_values, label="UPRO B&H",
                  linewidth=2.5, color=colors[0], alpha=0.9)
 
@@ -937,6 +991,15 @@ def main():
     tmf_close = data["TMF"]["Close"]
     irx_close = data["^IRX"]["Close"] if "^IRX" in data and not data["^IRX"].empty else None
 
+    # Download SSO (2x leveraged S&P 500, available since 2006-06-21)
+    print("  Downloading SSO...")
+    sso_raw = yf.download("SSO", start=DATA_START, end=END_DATE, progress=False,
+                          auto_adjust=True, multi_level_index=False)
+    sso_close = sso_raw["Close"].squeeze().dropna()
+    if not isinstance(sso_close.index, pd.DatetimeIndex):
+        sso_close.index = pd.to_datetime(sso_close.index)
+    print(f"    SSO: {len(sso_close)} days, {sso_close.index[0].strftime('%Y-%m-%d')} to {sso_close.index[-1].strftime('%Y-%m-%d')}")
+
     # Ensure all series have DatetimeIndex
     for name, series in [("SPY", spy_close), ("UPRO", upro_close),
                          ("VIX", vix_close), ("TLT", tlt_close), ("TMF", tmf_close)]:
@@ -973,26 +1036,32 @@ def main():
     print("=" * 80)
 
     spy_dates, spy_values, spy_metrics = run_spy_bh(spy_close, upro_close.index[0])
+    sso_dates, sso_values, sso_metrics = run_sso_bh(sso_close, upro_close.index[0])
     s3_dates, s3_values, s3_metrics = run_synthetic_3x(spy_close, upro_close.index[0], annual_margin_rate=0.0)
     s3m_dates, s3m_values, s3m_metrics = run_synthetic_3x(spy_close, upro_close.index[0], annual_margin_rate=0.06)
+    stat_free_dates, stat_free_values, stat_free_metrics = run_static_3x(spy_close, upro_close.index[0], annual_margin_rate=0.0)
     stat_dates, stat_values, stat_metrics = run_static_3x(spy_close, upro_close.index[0], annual_margin_rate=0.06)
 
-    lev_results = [spy_metrics, s3_metrics, s3m_metrics, stat_metrics, bm_metrics]
+    lev_results = [spy_metrics, sso_metrics, s3_metrics, s3m_metrics, stat_free_metrics, stat_metrics, bm_metrics]
     print_strategy_table("LEVERAGE COMPARISON", lev_results)
 
     # Report margin call info for static 3x
-    if stat_metrics.get("margin_call_day") is not None:
-        print(f"\n  ** Static 3x MARGIN CALL on {stat_metrics['margin_call_date']} "
-              f"(day {stat_metrics['days_to_margin_call']}) **")
+    if stat_metrics.get("margin_call_count", 0) > 0:
+        print(f"\n  ** Static 3x: {stat_metrics['margin_call_count']} partial margin call(s), "
+              f"first on {stat_metrics['margin_call_date']} "
+              f"(day {stat_metrics['days_to_margin_call']})"
+              f"{', WIPED OUT' if stat_metrics.get('wiped_out') else ''} **")
 
     # Add to curves for charting
     all_curves[spy_metrics["name"]] = (spy_dates, spy_values)
+    all_curves[sso_metrics["name"]] = (sso_dates, sso_values)
     all_curves[s3_metrics["name"]] = (s3_dates, s3_values)
     all_curves[s3m_metrics["name"]] = (s3m_dates, s3m_values)
+    all_curves[stat_free_metrics["name"]] = (stat_free_dates, stat_free_values)
     all_curves[stat_metrics["name"]] = (stat_dates, stat_values)
 
     # Store leverage comparison metrics for final output
-    leverage_comparison = [spy_metrics, s3_metrics, s3m_metrics, stat_metrics, bm_metrics]
+    leverage_comparison = [spy_metrics, sso_metrics, s3_metrics, s3m_metrics, stat_free_metrics, stat_metrics, bm_metrics]
 
     # ==================================================================
     # STRATEGY 1: VIX-BASED REGIME FILTER
@@ -1107,8 +1176,14 @@ def main():
     chart_path = os.path.join(_this_dir, "upro_timing_analysis.png")
     csv_path = os.path.join(_this_dir, "upro_timing_results.csv")
 
+    # Build reference curves for the head-to-head chart (SPY and SSO)
+    ref_curves = [
+        (spy_metrics["name"], spy_dates, spy_values),
+        (sso_metrics["name"], sso_dates, sso_values),
+    ]
     create_charts(bm_dates, bm_values, bm_metrics,
-                  best_per_strategy, all_results, chart_path)
+                  best_per_strategy, all_results, chart_path,
+                  reference_curves=ref_curves)
     save_results_csv(bm_metrics, all_results, csv_path)
 
     print("\n" + "=" * 110)

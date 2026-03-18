@@ -134,6 +134,50 @@ OPEN_POSITIONS = [
         entry_price=51.76,
         notes="Fourth trade - 78 delta"
     ),
+    Position(
+        account="IRA",
+        entry_date="2026-03-03",
+        symbol="SPY",
+        strike=625,
+        expiration="2026-06-18",
+        right="C",
+        quantity=5,
+        entry_price=71.68,
+        notes="Fifth trade - 80 delta, deep ITM"
+    ),
+    Position(
+        account="IRA",
+        entry_date="2026-03-03",
+        symbol="QQQ",
+        strike=550,
+        expiration="2026-06-18",
+        right="C",
+        quantity=5,
+        entry_price=71.47,
+        notes="Sixth trade - QQQ 81 delta"
+    ),
+    Position(
+        account="IRA",
+        entry_date="2026-03-17",
+        symbol="SPY",
+        strike=620,
+        expiration="2026-07-17",
+        right="C",
+        quantity=5,
+        entry_price=70.07,
+        notes="Seventh trade - 80 delta"
+    ),
+    Position(
+        account="IRA",
+        entry_date="2026-03-17",
+        symbol="QQQ",
+        strike=560,
+        expiration="2026-08-21",
+        right="C",
+        quantity=5,
+        entry_price=71.50,
+        notes="Eighth trade - QQQ 80 delta"
+    ),
 ]
 
 
@@ -155,14 +199,14 @@ def connect_ibkr() -> Optional[IB]:
         return None
 
 
-def get_spy_price(ib: IB) -> Optional[float]:
-    """Get current SPY price."""
-    spy = Stock("SPY", "SMART", "USD")
-    ib.qualifyContracts(spy)
-    ticker = ib.reqMktData(spy, '', False, False)
+def get_stock_price(ib: IB, symbol: str) -> Optional[float]:
+    """Get current stock price from IBKR."""
+    stock = Stock(symbol, "SMART", "USD")
+    ib.qualifyContracts(stock)
+    ticker = ib.reqMktData(stock, '', False, False)
     ib.sleep(2)
     price = ticker.marketPrice()
-    ib.cancelMktData(spy)
+    ib.cancelMktData(stock)
     return price if price > 0 else None
 
 
@@ -305,7 +349,7 @@ def print_position_status(pos: Position, current_price: float, spot: float,
     print(f"  {'P&L (%):':<20} {pnl_pct:+.1f}%")
     print()
 
-    print(f"  {'SPY Price:':<20} ${spot:.2f}")
+    print(f"  {pos.symbol + ' Price:':<20} ${spot:.2f}")
     print(f"  {'Current Delta:':<20} {delta:.2f} ({int(delta*100)}-delta)")
     print(f"  {'Total Delta:':<20} {total_delta:.0f} (~{int(total_delta)} shares)")
     print(f"  {'Intrinsic:':<20} ${max(0, spot - pos.strike):.2f}")
@@ -325,7 +369,7 @@ def print_position_status(pos: Position, current_price: float, spot: float,
     print()
 
 
-def print_summary(positions: List[Position], prices: dict, spot: float):
+def print_summary(positions: List[Position], prices: dict, spot_prices: dict):
     """Print portfolio summary."""
 
     total_cost = sum(p.total_cost for p in positions)
@@ -335,7 +379,7 @@ def print_summary(positions: List[Position], prices: dict, spot: float):
     total_pnl_pct = (total_value / total_cost - 1) * 100 if total_cost > 0 else 0
 
     total_delta = sum(
-        calculate_delta(spot, p.strike, p.dte) * p.quantity * 100
+        calculate_delta(spot_prices.get(p.symbol, 600.0), p.strike, p.dte) * p.quantity * 100
         for p in positions
     )
 
@@ -371,14 +415,16 @@ def print_summary(positions: List[Position], prices: dict, spot: float):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor SPY Call Positions")
+    parser = argparse.ArgumentParser(description="Monitor 80-Delta Call Positions")
     parser.add_argument("--no-ibkr", action="store_true",
                         help="Skip IBKR connection, use estimates")
+    parser.add_argument("--summary", action="store_true",
+                        help="Show portfolio summary only, skip individual positions")
     args = parser.parse_args()
 
     print()
     print("=" * 70)
-    print("SPY 80-DELTA CALL STRATEGY - POSITION MONITOR")
+    print("80-DELTA CALL STRATEGY - POSITION MONITOR")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     print()
@@ -389,48 +435,43 @@ def main():
 
     # Connect to IBKR
     ib = None
-    spot = None
+    spot_prices = {}  # symbol -> price
     use_ibkr = not args.no_ibkr and HAS_IBKR
+    symbols = sorted(set(p.symbol for p in OPEN_POSITIONS))
 
     if use_ibkr:
         print("Connecting to IBKR...")
         ib = connect_ibkr()
         if ib:
-            spot = get_spy_price(ib)
-            print(f"SPY Price: ${spot:.2f}" if spot else "Could not get SPY price")
+            for sym in symbols:
+                price = get_stock_price(ib, sym)
+                if price:
+                    spot_prices[sym] = price
+                    print(f"{sym} Price: ${price:.2f}")
             print()
 
-    if not spot:
-        # Try ThetaData as fallback
-        try:
-            import sys
-            import os
-            _this_dir = os.path.dirname(os.path.abspath(__file__))
-            _project_dir = os.path.dirname(os.path.dirname(_this_dir))
-            sys.path.insert(0, _project_dir)
-            from backtest.thetadata_client import ThetaDataClient
-            from datetime import timedelta
-
-            client = ThetaDataClient()
-            if client.connect():
-                end_date = date.today().strftime("%Y-%m-%d")
-                start_date = (date.today() - timedelta(days=10)).strftime("%Y-%m-%d")
-                spy_bars = client.fetch_spy_bars(start_date, end_date)
-                if spy_bars:
-                    spot = spy_bars[-1]["close"]
-                    print(f"SPY Price (ThetaData): ${spot:.2f}")
-                client.close()
-        except Exception as e:
-            pass
-
-        if not spot:
-            spot = 600.0  # Conservative fallback - update periodically
-            print(f"Using fallback SPY price: ${spot:.2f}")
+    # Fallback for any missing prices
+    for sym in symbols:
+        if sym not in spot_prices:
+            try:
+                import yfinance as yf
+                t = yf.Ticker(sym)
+                hist = t.history(period="1d")
+                if not hist.empty:
+                    spot_prices[sym] = hist["Close"].iloc[-1]
+                    print(f"{sym} Price (yfinance): ${spot_prices[sym]:.2f}")
+            except Exception:
+                pass
+        if sym not in spot_prices:
+            spot_prices[sym] = 600.0
+            print(f"{sym}: Using fallback price ${spot_prices[sym]:.2f}")
+    if not ib:
         print()
 
     # Get prices for each position
     prices = {}
     for i, pos in enumerate(OPEN_POSITIONS):
+        spot = spot_prices.get(pos.symbol, 600.0)
         if ib:
             quote = get_option_price(ib, pos.symbol, pos.expiration,
                                      pos.strike, pos.right)
@@ -446,11 +487,12 @@ def main():
                                                pos.entry_price)
             source = "Estimate"
 
-        print_position_status(pos, prices[i], spot, source)
+        if not args.summary:
+            print_position_status(pos, prices[i], spot, source)
 
     # Summary
     if len(OPEN_POSITIONS) >= 1:
-        print_summary(OPEN_POSITIONS, prices, spot)
+        print_summary(OPEN_POSITIONS, prices, spot_prices)
 
     # Disconnect
     if ib:

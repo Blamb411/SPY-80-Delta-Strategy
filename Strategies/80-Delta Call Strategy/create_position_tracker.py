@@ -1,16 +1,18 @@
 """
-Generate position_tracker.xlsx with five sheets:
+Generate position_tracker.xlsx with six sheets:
   Sheet 1: SPY 80-Delta Call Strategy
   Sheet 2: Put Credit Spreads (PCS) Paper Trades
-  Sheet 3: TSLA Bear Put Debit Spread
-  Sheet 4: UPRO Long Position (DD25%/Cool40)
-  Sheet 5: Bear Put Spread Candidates
+  Sheet 3: Put Credit Spreads (PCS) Live Trades
+  Sheet 4: TSLA Bear Put Debit Spread
+  Sheet 5: UPRO Long Position (DD25%/Cool40)
+  Sheet 6: Bear Put Spread Candidates
 
-Pulls live prices from yfinance, PCS trades from put_spread_paper.db,
-Greeks from ThetaData (with BS fallback).
+Pulls live prices from yfinance, PCS trades from put_spread_paper.db
+and put_spread_live.db, Greeks from ThetaData (with BS fallback).
 """
 
 import math
+import os
 import sys
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -21,6 +23,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
 from openpyxl.utils import get_column_letter
 
 PCS_DB_PATH = "C:/Users/Admin/Trading/data/put_spread_paper.db"
+PCS_LIVE_DB_PATH = "C:/Users/Admin/Trading/data/put_spread_live.db"
 
 # ============================================================================
 # TRADE DATA
@@ -109,6 +112,34 @@ TRADES = [
         "delta_at_entry": 0.81,
         "dte_at_entry": 107,
         "spy_at_entry": 602.8,
+        "sma200_at_entry": 587.0,
+    },
+    {
+        "trade_num": 7,
+        "entry_date": "2026-03-17",
+        "symbol": "SPY",
+        "strike": 620,
+        "expiration": "2026-07-17",
+        "type": "CALL",
+        "quantity": 5,
+        "entry_price": 70.07,
+        "delta_at_entry": 0.80,
+        "dte_at_entry": 122,
+        "spy_at_entry": 671.0,
+        "sma200_at_entry": 655.0,
+    },
+    {
+        "trade_num": 8,
+        "entry_date": "2026-03-17",
+        "symbol": "QQQ",
+        "strike": 560,
+        "expiration": "2026-08-21",
+        "type": "CALL",
+        "quantity": 5,
+        "entry_price": 71.50,
+        "delta_at_entry": 0.80,
+        "dte_at_entry": 157,
+        "spy_at_entry": 595.0,
         "sma200_at_entry": 587.0,
     },
 ]
@@ -295,13 +326,24 @@ def bs_put_greeks(spot, strike, dte, iv, rate=0.045):
     return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "iv": iv}
 
 
-def get_thetadata_greeks(root, expiration, strike, right, query_date):
-    """Fetch Greeks from ThetaData Terminal. Returns dict or None on failure."""
+def _get_thetadata_client():
+    """Get a connected ThetaData client, or None."""
     try:
         sys.path.insert(0, "C:/Users/Admin/Trading/repos/backtest-infrastructure")
         from thetadata_client import ThetaDataClient
         client = ThetaDataClient()
-        if not client.connect():
+        if client.connect():
+            return client
+    except Exception as e:
+        print(f"ThetaData connection error: {e}")
+    return None
+
+
+def get_thetadata_greeks(root, expiration, strike, right, query_date):
+    """Fetch Greeks from ThetaData Terminal. Returns dict or None on failure."""
+    try:
+        client = _get_thetadata_client()
+        if not client:
             return None
         results = client.get_option_greeks(
             root=root, expiration=expiration, strike=float(strike),
@@ -312,6 +354,198 @@ def get_thetadata_greeks(root, expiration, strike, right, query_date):
     except Exception as e:
         print(f"ThetaData Greeks error: {e}")
     return None
+
+
+def get_recommended_trades(symbols, price_map, today):
+    """Fetch real expiration/strike/quote data for recommended 80-delta trades.
+
+    Uses ThetaData for expirations, strikes, Greeks, and EOD quotes.
+    Falls back to IBKR for live bid/ask if available, then to BS estimates.
+
+    Returns list of dicts with keys:
+        symbol, strike, expiration, dte, delta, iv, bid, ask, mid,
+        cost_5, cost_10, source
+    """
+    client = _get_thetadata_client()
+    ib = None
+
+    # Try IBKR for live bid/ask
+    try:
+        from ib_insync import IB, Stock, Option as IBOption
+        ib = IB()
+        ib.connect("127.0.0.1", 7497, clientId=97, timeout=5)
+    except Exception:
+        ib = None
+
+    results = []
+    target_dte = 120
+
+    for sym in symbols:
+        spot = price_map.get(sym, 600.0)
+        vix_iv = (get_current_vix() or 20.0) / 100.0
+        rec = {"symbol": sym, "source": "BS estimate"}
+
+        # ── Step 1: Get real expirations from ThetaData ──
+        expirations = []
+        if client:
+            try:
+                all_exps = client.get_expirations(sym)
+                for exp_str in all_exps:
+                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                    dte = (exp_date - today).days
+                    if 90 <= dte <= 150:
+                        expirations.append((abs(dte - target_dte), exp_str, exp_date, dte))
+            except Exception as e:
+                print(f"  ThetaData expirations error for {sym}: {e}")
+
+        if expirations:
+            expirations.sort()
+            _, best_exp_str, best_exp_date, best_dte = expirations[0]
+            print(f"  {sym}: Found {len(expirations)} expirations in 90-150d range, "
+                  f"best = {best_exp_str} ({best_dte} DTE)")
+        else:
+            # Fallback to calculated 3rd Friday
+            print(f"  {sym}: No ThetaData expirations, using calculated 3rd Friday")
+            candidates = []
+            for month_offset in range(3, 7):
+                m = (today.month + month_offset - 1) % 12 + 1
+                y = today.year + (today.month + month_offset - 1) // 12
+                first = date(y, m, 1)
+                dow = first.weekday()
+                first_fri = first + timedelta(days=(4 - dow) % 7)
+                third_fri = first_fri + timedelta(days=14)
+                exp_dte = (third_fri - today).days
+                if 90 <= exp_dte <= 150:
+                    candidates.append((abs(exp_dte - target_dte), third_fri, exp_dte))
+            if not candidates:
+                continue
+            candidates.sort()
+            best_exp_date = candidates[0][1]
+            best_dte = candidates[0][2]
+            best_exp_str = best_exp_date.strftime("%Y-%m-%d")
+
+        # ── Step 2: Find 80-delta strike from real strikes ──
+        # BS estimate for target strike
+        lo, hi = spot * 0.7, spot * 1.1
+        for _ in range(100):
+            mid_k = (lo + hi) / 2
+            d = bs_delta(spot, mid_k, best_dte, iv=vix_iv)
+            if d > 0.80:
+                lo = mid_k
+            else:
+                hi = mid_k
+        est_strike = round(mid_k)
+
+        # Snap to real available strikes if possible
+        rec_strike = est_strike
+        if client:
+            try:
+                strikes = client.get_strikes(sym, best_exp_str)
+                if strikes:
+                    rec_strike = min(strikes, key=lambda k: abs(k - est_strike))
+                    print(f"  {sym}: Snapped strike ${est_strike} -> ${rec_strike} "
+                          f"(from {len(strikes)} available)")
+            except Exception as e:
+                print(f"  ThetaData strikes error for {sym}: {e}")
+
+        # ── Step 3: Get real Greeks ──
+        real_delta = None
+        real_iv = None
+        today_str = today.strftime("%Y-%m-%d")
+
+        if client:
+            try:
+                greeks = client.get_option_greeks(
+                    root=sym, expiration=best_exp_str,
+                    strike=float(rec_strike), right="C",
+                    start=today_str, end=today_str)
+                if greeks:
+                    g = greeks[-1]
+                    real_delta = g.get("delta")
+                    real_iv = g.get("iv")
+                    rec["source"] = "ThetaData"
+                    print(f"  {sym}: ThetaData Greeks — delta={real_delta:.3f}, IV={real_iv:.1%}")
+            except Exception as e:
+                print(f"  ThetaData Greeks error for {sym}: {e}")
+
+        # ── Step 4: Get bid/ask ──
+        bid, ask, mid_price = None, None, None
+
+        # Try IBKR first for live quotes
+        if ib:
+            try:
+                exp_ib = best_exp_str.replace("-", "")
+                opt = IBOption(sym, exp_ib, rec_strike, "C", "SMART")
+                ib.qualifyContracts(opt)
+                ticker = ib.reqMktData(opt, '', False, False)
+                ib.sleep(2)
+                if ticker.bid and ticker.bid > 0:
+                    bid = ticker.bid
+                if ticker.ask and ticker.ask > 0:
+                    ask = ticker.ask
+                if bid and ask:
+                    mid_price = (bid + ask) / 2
+                    rec["source"] = "IBKR live"
+                    print(f"  {sym}: IBKR quote — bid=${bid:.2f} ask=${ask:.2f}")
+                elif ticker.last and ticker.last > 0:
+                    mid_price = ticker.last
+                    rec["source"] = "IBKR last"
+                ib.cancelMktData(opt)
+            except Exception as e:
+                print(f"  IBKR quote error for {sym}: {e}")
+
+        # Fallback to ThetaData EOD quotes
+        if mid_price is None and client:
+            try:
+                eod = client.get_option_eod(
+                    root=sym, expiration=best_exp_str,
+                    strike=float(rec_strike), right="C",
+                    start=today_str, end=today_str)
+                if eod:
+                    row_data = eod[-1]
+                    bid = row_data.get("bid")
+                    ask = row_data.get("ask")
+                    if bid and ask and bid > 0 and ask > 0:
+                        mid_price = (bid + ask) / 2
+                        if rec["source"] == "BS estimate":
+                            rec["source"] = "ThetaData EOD"
+                    elif row_data.get("close") and row_data["close"] > 0:
+                        mid_price = row_data["close"]
+                        if rec["source"] == "BS estimate":
+                            rec["source"] = "ThetaData close"
+            except Exception as e:
+                print(f"  ThetaData EOD error for {sym}: {e}")
+
+        # Final fallback to BS price
+        if mid_price is None:
+            mid_price = bs_call_price(spot, rec_strike, best_dte, iv=vix_iv)
+
+        if real_delta is None:
+            real_delta = bs_delta(spot, rec_strike, best_dte, iv=vix_iv)
+        if real_iv is None:
+            real_iv = vix_iv
+
+        rec.update({
+            "strike": rec_strike,
+            "expiration": best_exp_str,
+            "dte": best_dte,
+            "delta": real_delta,
+            "iv": real_iv,
+            "bid": bid,
+            "ask": ask,
+            "mid": mid_price,
+            "cost_5": mid_price * 100 * 5,
+            "cost_10": mid_price * 100 * 10,
+        })
+        results.append(rec)
+
+    if ib:
+        try:
+            ib.disconnect()
+        except Exception:
+            pass
+
+    return results
 
 
 def get_tsla_iv_from_yfinance():
@@ -401,9 +635,12 @@ def get_styles():
 # PCS DATA FROM DATABASE
 # ============================================================================
 
-def load_pcs_trades():
-    """Load all PCS trades from put_spread_paper.db."""
-    conn = sqlite3.connect(PCS_DB_PATH)
+def load_pcs_trades(db_path=None):
+    """Load all PCS trades from a PCS database."""
+    db_path = db_path or PCS_DB_PATH
+    if not os.path.exists(db_path):
+        return [], {}
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
@@ -709,16 +946,17 @@ def build_80delta_sheet(ws, price_map, sma_map, today):
         row += 1
 
     # ========================================================================
-    # RECOMMENDED NEXT TRADES
+    # RECOMMENDED NEXT TRADES (live data)
     # ========================================================================
     row += 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
-    cell = ws.cell(row=row, column=1, value="Recommended Next Trades")
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
+    cell = ws.cell(row=row, column=1, value="Recommended Next Trades (80-Delta Calls)")
     cell.font = s["section_font"]
     row += 1
 
-    rec_headers = ["Symbol", "Strike", "Expiration", "DTE", "Est Delta",
-                   "Est Price", "Cost (10 ct)", "Cost (5 ct)"]
+    rec_headers = ["Symbol", "Strike", "Expiration", "DTE", "Delta",
+                   "IV", "Bid", "Ask", "Mid",
+                   "Cost (5 ct)", "Cost (10 ct)", "Source"]
     for col_idx, h in enumerate(rec_headers, 1):
         cell = ws.cell(row=row, column=col_idx, value=h)
         cell.font = s["header_font"]
@@ -726,47 +964,24 @@ def build_80delta_sheet(ws, price_map, sma_map, today):
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
         cell.border = s["thin_border"]
 
-    for sym in ["SPY", "QQQ"]:
+    print("\nFetching recommended trade data...")
+    recommendations = get_recommended_trades(["SPY", "QQQ"], price_map, today)
+
+    for rec in recommendations:
         row += 1
-        spot = price_map.get(sym, 600.0)
-        vix_iv = (get_current_vix() or 20.0) / 100.0
-
-        # Find ~120 DTE monthly expiration (3rd Friday)
-        target_dte = 120
-        candidates = []
-        for month_offset in range(3, 7):
-            m = (today.month + month_offset - 1) % 12 + 1
-            y = today.year + (today.month + month_offset - 1) // 12
-            first = date(y, m, 1)
-            dow = first.weekday()
-            first_fri = first + timedelta(days=(4 - dow) % 7)
-            third_fri = first_fri + timedelta(days=14)
-            exp_dte = (third_fri - today).days
-            if 90 <= exp_dte <= 150:
-                candidates.append((abs(exp_dte - target_dte), third_fri, exp_dte))
-        if not candidates:
-            continue
-        candidates.sort()
-        best_exp, best_dte = candidates[0][1], candidates[0][2]
-
-        # Find strike for 0.80 delta via bisection
-        lo, hi = spot * 0.7, spot * 1.1
-        t_years = best_dte / 365.0
-        for _ in range(100):
-            mid = (lo + hi) / 2
-            d = bs_delta(spot, mid, best_dte, iv=vix_iv)
-            if d > 0.80:
-                lo = mid
-            else:
-                hi = mid
-        rec_strike = round(mid)
-        rec_delta = bs_delta(spot, rec_strike, best_dte, iv=vix_iv)
-        rec_price = bs_call_price(spot, rec_strike, best_dte, iv=vix_iv)
-
         values = [
-            sym, rec_strike, best_exp.strftime("%Y-%m-%d"), best_dte,
-            rec_delta, rec_price,
-            rec_price * 100 * 10, rec_price * 100 * 5,
+            rec["symbol"],                                    # 1
+            rec["strike"],                                    # 2
+            rec["expiration"],                                # 3
+            rec["dte"],                                       # 4
+            rec["delta"],                                     # 5
+            rec["iv"],                                        # 6
+            rec["bid"] if rec["bid"] else "-",                # 7
+            rec["ask"] if rec["ask"] else "-",                # 8
+            rec["mid"],                                       # 9
+            rec["cost_5"],                                    # 10
+            rec["cost_10"],                                   # 11
+            rec["source"],                                    # 12
         ]
         for col_idx, val in enumerate(values, 1):
             cell = ws.cell(row=row, column=col_idx, value=val)
@@ -774,11 +989,14 @@ def build_80delta_sheet(ws, price_map, sma_map, today):
             cell.border = s["thin_border"]
             cell.alignment = Alignment(horizontal="center")
 
-        ws.cell(row=row, column=2).number_format = s["money_whole_fmt"]
-        ws.cell(row=row, column=5).number_format = s["delta_fmt"]
-        ws.cell(row=row, column=6).number_format = s["money_fmt"]
-        ws.cell(row=row, column=7).number_format = s["money_whole_fmt"]
-        ws.cell(row=row, column=8).number_format = s["money_whole_fmt"]
+        ws.cell(row=row, column=2).number_format = s["money_whole_fmt"]  # Strike
+        ws.cell(row=row, column=5).number_format = s["delta_fmt"]        # Delta
+        ws.cell(row=row, column=6).number_format = s["pct_fmt"]          # IV
+        for c in [7, 8, 9]:                                               # Bid/Ask/Mid
+            if ws.cell(row=row, column=c).value != "-":
+                ws.cell(row=row, column=c).number_format = s["money_fmt"]
+        ws.cell(row=row, column=10).number_format = s["money_whole_fmt"]  # Cost 5ct
+        ws.cell(row=row, column=11).number_format = s["money_whole_fmt"]  # Cost 10ct
 
     # Column widths
     col_widths = {
@@ -845,9 +1063,9 @@ def get_current_vix():
     return None
 
 
-def build_pcs_sheet(ws, spy_price, today):
+def build_pcs_sheet(ws, spy_price, today, db_path=None, sheet_title=None):
     s = get_styles()
-    positions, latest_logs = load_pcs_trades()
+    positions, latest_logs = load_pcs_trades(db_path=db_path)
 
     # Get QQQ price
     qqq_price = get_price("QQQ", 500.0)
@@ -871,20 +1089,24 @@ def build_pcs_sheet(ws, spy_price, today):
     # TITLE
     # ========================================================================
     row = 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=29)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=32)
+    is_live = (db_path and "live" in db_path.lower())
+    default_title = ("Put Credit Spreads -- Live Trades" if is_live
+                     else "Put Credit Spreads -- Paper Trades (Account DUA976236)")
     cell = ws.cell(row=row, column=1,
-                   value="Put Credit Spreads -- Paper Trades (Account DUA976236)")
+                   value=sheet_title or default_title)
     cell.font = s["title_font"]
     cell.fill = s["pcs_title_fill"]
     cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[row].height = 30
 
+    mode_label = "LIVE TRADING" if is_live else "PAPER TRADING - NOT REAL MONEY"
     row = 2
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=29)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=32)
     cell = ws.cell(row=row, column=1,
                    value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  "
                          f"SPY: ${spy_price:.2f}  |  QQQ: ${qqq_price:.2f}  |  "
-                         f"PAPER TRADING - NOT REAL MONEY")
+                         f"{mode_label}")
     cell.font = Font(name="Calibri", size=10, italic=True, bold=True, color="4A2545")
     cell.alignment = Alignment(horizontal="center")
 
@@ -930,7 +1152,7 @@ def build_pcs_sheet(ws, spy_price, today):
     # ALL TRADES TABLE
     # ========================================================================
     row += 1
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=29)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=32)
     cell = ws.cell(row=row, column=1, value="All Trades (Paper)")
     cell.font = s["pcs_section_font"]
     row += 1
@@ -942,13 +1164,14 @@ def build_pcs_sheet(ws, spy_price, today):
         "Credit/sh",                                                     # 11
         "SP Rcvd/Ctr", "LP Paid/Ctr",                                   # 12-13
         "TP Target", "SL Trigger",                                       # 14-15
-        "Cur Spread", "Unreal P&L ($)", "Unreal P&L (%)",               # 16-18
+        "Cur Spread", "P&L ($)", "P&L (%)",                             # 16-18
         "Total Credit", "Max Loss",                                      # 19-20
-        "Spot@Entry", "Cur Spot",                                        # 21-22
-        "VIX@Entry", "Cur VIX",                                          # 23-24
-        "IVR@Entry", "Cur IVR",                                          # 25-26
-        "SMA200@Entry", "Cur SMA200",                                    # 27-28
-        "Notes",                                                         # 29
+        "Exit Date", "Exit Debit", "Exit Reason",                        # 21-23
+        "Spot@Entry", "Cur Spot",                                        # 24-25
+        "VIX@Entry", "Cur VIX",                                          # 26-27
+        "IVR@Entry", "Cur IVR",                                          # 28-29
+        "SMA200@Entry", "Cur SMA200",                                    # 30-31
+        "Notes",                                                         # 32
     ]
 
     header_row = row
@@ -1009,6 +1232,16 @@ def build_pcs_sheet(ws, spy_price, today):
         sp_rcvd_ctr = sp_entry * 100  # per contract
         lp_paid_ctr = lp_entry * 100  # per contract
 
+        # For closed trades, show realized P&L; for open, show unrealized
+        if p["status"] == "closed":
+            display_pnl = p.get("pnl") or 0
+            display_pnl_pct = (display_pnl / total_credit) if total_credit > 0 else 0
+            exit_debit = p.get("exit_debit") or p.get("exit_credit") or "-"
+        else:
+            display_pnl = pnl_dollar if cur_spread is not None else "-"
+            display_pnl_pct = pnl_pct if pnl_pct is not None else "-"
+            exit_debit = "-"
+
         values = [
             p["id"],                                                     # 1
             status_display,                                              # 2
@@ -1026,19 +1259,22 @@ def build_pcs_sheet(ws, spy_price, today):
             p["tp_target"],                                              # 14 TP Target
             p["sl_trigger_debit"],                                       # 15 SL Trigger
             cur_spread if cur_spread is not None else "-",               # 16 Cur Spread
-            pnl_dollar if cur_spread is not None else "-",               # 17 P&L ($)
-            pnl_pct if pnl_pct is not None else "-",                     # 18 P&L (%)
+            display_pnl,                                                 # 17 P&L ($)
+            display_pnl_pct,                                             # 18 P&L (%)
             total_credit,                                                # 19 Total Credit
             p["max_loss"],                                               # 20 Max Loss
-            p["spot_at_entry"],                                          # 21 Spot@Entry
-            cur_spot if p["status"] == "open" else "-",                  # 22 Cur Spot
-            p["vix_at_entry"],                                           # 23 VIX@Entry
-            cur_vix if p["status"] == "open" else "-",                   # 24 Cur VIX
-            p["iv_rank"],                                                # 25 IVR@Entry
-            cur_ivr if p["status"] == "open" and cur_ivr is not None else "-",  # 26 Cur IVR
-            p["sma_value"],                                              # 27 SMA200@Entry
-            sma200_map.get(p["ticker"]) if p["status"] == "open" else "-",  # 28 Cur SMA200
-            p["notes"] or "",                                            # 29 Notes
+            p.get("exit_date") or "-",                                   # 21 Exit Date
+            exit_debit,                                                  # 22 Exit Debit
+            p.get("exit_reason") or "-",                                 # 23 Exit Reason
+            p["spot_at_entry"],                                          # 24 Spot@Entry
+            cur_spot if p["status"] == "open" else "-",                  # 25 Cur Spot
+            p["vix_at_entry"],                                           # 26 VIX@Entry
+            cur_vix if p["status"] == "open" else "-",                   # 27 Cur VIX
+            p["iv_rank"],                                                # 28 IVR@Entry
+            cur_ivr if p["status"] == "open" and cur_ivr is not None else "-",  # 29 Cur IVR
+            p["sma_value"],                                              # 30 SMA200@Entry
+            sma200_map.get(p["ticker"]) if p["status"] == "open" else "-",  # 31 Cur SMA200
+            p["notes"] or "",                                            # 32 Notes
         ]
 
         for col_idx, val in enumerate(values, 1):
@@ -1059,42 +1295,45 @@ def build_pcs_sheet(ws, spy_price, today):
         for c in [17, 19, 20]:
             if ws.cell(row=row, column=c).value != "-":
                 ws.cell(row=row, column=c).number_format = s["money_whole_fmt"]
+        # Exit debit (22)
+        if ws.cell(row=row, column=22).value != "-":
+            ws.cell(row=row, column=22).number_format = s["money_fmt"]
         # Strike/wing cols
         for c in [7, 8, 9]:
             ws.cell(row=row, column=c).number_format = s["money_fmt"]
-        # Spot cols: spot@entry(21), cur_spot(22)
-        for c in [21, 22]:
+        # Spot cols: spot@entry(24), cur_spot(25)
+        for c in [24, 25]:
             if ws.cell(row=row, column=c).value != "-":
                 ws.cell(row=row, column=c).number_format = s["money_fmt"]
-        # VIX: vix@entry(23), cur_vix(24)
-        for c in [23, 24]:
+        # VIX: vix@entry(26), cur_vix(27)
+        for c in [26, 27]:
             if ws.cell(row=row, column=c).value != "-":
                 ws.cell(row=row, column=c).number_format = '0.0'
-        # IVR: ivr@entry(25), cur_ivr(26)
-        for c in [25, 26]:
+        # IVR: ivr@entry(28), cur_ivr(29)
+        for c in [28, 29]:
             if ws.cell(row=row, column=c).value != "-":
                 ws.cell(row=row, column=c).number_format = s["pct_fmt"]
-        # SMA200: sma@entry(27), cur_sma(28)
-        for c in [27, 28]:
+        # SMA200: sma@entry(30), cur_sma(31)
+        for c in [30, 31]:
             if ws.cell(row=row, column=c).value != "-":
                 ws.cell(row=row, column=c).number_format = s["money_fmt"]
         # P&L %
         if ws.cell(row=row, column=18).value != "-":
             ws.cell(row=row, column=18).number_format = s["pct_fmt"]
 
-        # Color coding
-        if p["status"] == "open":
-            # P&L coloring
-            if cur_spread is not None:
+        # Color coding for P&L
+        if p["status"] in ("open", "closed"):
+            pnl_val = display_pnl if display_pnl != "-" else 0
+            if pnl_val != "-":
                 pnl_cell = ws.cell(row=row, column=17)
                 pnl_pct_cell = ws.cell(row=row, column=18)
-                if pnl_dollar >= 0:
+                if pnl_val >= 0:
                     pnl_cell.fill = s["green_fill"]
                     pnl_pct_cell.fill = s["green_fill"]
                 else:
                     pnl_cell.fill = s["red_fill"]
                     pnl_pct_cell.fill = s["red_fill"]
-        elif p["status"] == "cancelled":
+        if p["status"] == "cancelled":
             # Gray out entire row for cancelled
             gray_font = Font(name="Calibri", size=10, color="999999")
             for col_idx in range(1, len(values) + 1):
@@ -1105,6 +1344,9 @@ def build_pcs_sheet(ws, spy_price, today):
         if p["status"] == "open":
             status_cell.fill = s["green_fill"]
             status_cell.font = Font(name="Calibri", size=10, bold=True, color="006100")
+        elif p["status"] == "closed":
+            status_cell.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+            status_cell.font = Font(name="Calibri", size=10, bold=True, color="1F4E79")
         elif p["status"] == "cancelled":
             status_cell.fill = s["light_gray_fill"]
             status_cell.font = Font(name="Calibri", size=10, color="999999")
@@ -1148,6 +1390,49 @@ def build_pcs_sheet(ws, spy_price, today):
 
         row += 1
 
+    # ========================================================================
+    # CLOSED TRADES SUMMARY
+    # ========================================================================
+    closed_trades = [p for p in positions if p["status"] == "closed"]
+    if closed_trades:
+        row += 1
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        cell = ws.cell(row=row, column=1, value="Closed Trades Summary")
+        cell.font = s["pcs_section_font"]
+        row += 1
+
+        closed_pnl = sum(p.get("pnl") or 0 for p in closed_trades)
+        closed_credit = sum(
+            p["entry_credit"] * 100 * p["num_contracts"] for p in closed_trades)
+        wins = sum(1 for p in closed_trades if (p.get("pnl") or 0) > 0)
+        win_rate = wins / len(closed_trades) if closed_trades else 0
+
+        closed_summary = [
+            ("Closed Trades", len(closed_trades)),
+            ("Win Rate", win_rate),
+            ("Total Realized P&L", closed_pnl),
+            ("Total Credit Collected", closed_credit),
+        ]
+
+        for label, value in closed_summary:
+            c1 = ws.cell(row=row, column=1, value=label)
+            c2 = ws.cell(row=row, column=2, value=value)
+            c1.font = Font(name="Calibri", size=10, bold=True)
+            c1.fill = s["light_gray_fill"]
+            c1.border = s["thin_border"]
+            c2.font = s["data_font"]
+            c2.border = s["thin_border"]
+            c2.alignment = Alignment(horizontal="right")
+
+            if "Credit" in label or ("P&L" in label):
+                c2.number_format = s["money_whole_fmt"]
+            if "Win Rate" in label:
+                c2.number_format = s["pct_fmt"]
+            if "P&L" in label:
+                c2.fill = s["green_fill"] if value >= 0 else s["red_fill"]
+
+            row += 1
+
     # Column widths
     col_widths = {
         1: 5, 2: 12, 3: 8, 4: 12, 5: 12, 6: 6,
@@ -1158,11 +1443,12 @@ def build_pcs_sheet(ws, spy_price, today):
         14: 10, 15: 10,       # TP Target, SL Trigger
         16: 11, 17: 14, 18: 13,  # Cur Spread, P&L ($), P&L (%)
         19: 13, 20: 12,       # Total Credit, Max Loss
-        21: 12, 22: 11,       # Spot@Entry, Cur Spot
-        23: 10, 24: 9,        # VIX@Entry, Cur VIX
-        25: 10, 26: 9,        # IVR@Entry, Cur IVR
-        27: 13, 28: 12,       # SMA200@Entry, Cur SMA200
-        29: 40,                # Notes
+        21: 12, 22: 10, 23: 14,  # Exit Date, Exit Debit, Exit Reason
+        24: 12, 25: 11,       # Spot@Entry, Cur Spot
+        26: 10, 27: 9,        # VIX@Entry, Cur VIX
+        28: 10, 29: 9,        # IVR@Entry, Cur IVR
+        30: 13, 31: 12,       # SMA200@Entry, Cur SMA200
+        32: 40,                # Notes
     }
     for col, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col)].width = width
@@ -1859,30 +2145,37 @@ def build_spreadsheet(output_path):
 
     # Sheet 2: PCS Paper Trades
     ws2 = wb.create_sheet("PCS Paper Trades")
-    pcs_results = build_pcs_sheet(ws2, spy_price, today)
+    pcs_results = build_pcs_sheet(ws2, spy_price, today,
+                                  db_path=PCS_DB_PATH)
 
-    # Sheet 3: TSLA Bear Put Spread
-    ws3 = wb.create_sheet("TSLA Bear Put Spread")
-    tsla_results = build_tsla_spread_sheet(ws3, today)
+    # Sheet 3: PCS Live Trades
+    ws3 = wb.create_sheet("PCS Live Trades")
+    pcs_live_results = build_pcs_sheet(ws3, spy_price, today,
+                                       db_path=PCS_LIVE_DB_PATH)
 
-    # Sheet 4: UPRO DD25/Cool40
-    ws4 = wb.create_sheet("UPRO DD25-Cool40")
-    upro_results = build_upro_sheet(ws4, today)
+    # Sheet 4: TSLA Bear Put Spread
+    ws4 = wb.create_sheet("TSLA Bear Put Spread")
+    tsla_results = build_tsla_spread_sheet(ws4, today)
 
-    # Sheet 5: Bear Put Spread Candidates
-    ws5 = wb.create_sheet("Bear Spread Candidates")
-    bear_results = build_bear_candidates_sheet(ws5, today)
+    # Sheet 5: UPRO DD25/Cool40
+    ws5 = wb.create_sheet("UPRO DD25-Cool40")
+    upro_results = build_upro_sheet(ws5, today)
+
+    # Sheet 6: Bear Put Spread Candidates
+    ws6 = wb.create_sheet("Bear Spread Candidates")
+    bear_results = build_bear_candidates_sheet(ws6, today)
 
     wb.save(output_path)
     print(f"\nSaved: {output_path}")
-    return delta_results, pcs_results, tsla_results, upro_results, bear_results
+    return (delta_results, pcs_results, pcs_live_results,
+            tsla_results, upro_results, bear_results)
 
 
 if __name__ == "__main__":
-    import os
     out_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(out_dir, "position_tracker.xlsx")
-    delta_results, pcs_results, tsla_results, upro_results, bear_results = build_spreadsheet(out_path)
+    (delta_results, pcs_results, pcs_live_results,
+     tsla_results, upro_results, bear_results) = build_spreadsheet(out_path)
 
     cost, value, pnl, delta_exp, contracts = delta_results
     print(f"\n--- 80-Delta Calls ---")
@@ -1894,6 +2187,11 @@ if __name__ == "__main__":
     print(f"\n--- PCS Paper Trades ---")
     print(f"Open: {n_open}  |  Contracts: {pcs_contracts}")
     print(f"Credit: ${pcs_credit:,.0f}  |  P&L: ${pcs_pnl:+,.0f}")
+
+    n_live, live_contracts, live_credit, live_pnl = pcs_live_results
+    print(f"\n--- PCS Live Trades ---")
+    print(f"Open: {n_live}  |  Contracts: {live_contracts}")
+    print(f"Credit: ${live_credit:,.0f}  |  P&L: ${live_pnl:+,.0f}")
 
     tsla_cost, tsla_val, tsla_pnl, tsla_pct = tsla_results
     print(f"\n--- TSLA Bear Put Spread ---")
