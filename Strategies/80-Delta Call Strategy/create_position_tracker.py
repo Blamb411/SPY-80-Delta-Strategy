@@ -2119,6 +2119,116 @@ def build_bear_candidates_sheet(ws, today):
 
 
 # ============================================================================
+# IRA EQUITY POSITIONS (Software Thesis + Other Holdings)
+# ============================================================================
+
+IRA_POSITIONS = [
+    {
+        "ticker": "WDAY",
+        "name": "Workday Inc",
+        "shares": 4000,
+        "entry_price": 135.86,
+        "entry_date": "2026-03-20",
+        "thesis": "Software meltdown — AI panic overdone for HCM/finance. 18% implied WACC on Baa1 credit.",
+        "project": "P-11 (Software Meltdown)",
+        "falsification": "NRR < 110%, NRR decel > 5pts QoQ, or F500 full platform replacement",
+    },
+]
+
+
+def build_ira_positions_sheet(ws, today):
+    """Build sheet tracking IRA equity positions (conviction picks)."""
+    s = get_styles()
+
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    cell = ws.cell(row=row, column=1, value="IRA Equity Positions -- Conviction Picks")
+    cell.font = Font(name="Calibri", size=14, bold=True, color="1A3C6E")
+    cell.fill = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[row].height = 30
+
+    row = 2
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    ws.cell(row=row, column=1,
+            value=f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}").font = \
+        Font(name="Calibri", size=10, italic=True)
+
+    # Headers
+    row = 4
+    headers = ["Ticker", "Name", "Shares", "Entry Price", "Entry Date",
+               "Current Price", "Market Value", "P&L ($)", "P&L (%)", "Thesis"]
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=col, value=header)
+        cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1A3C6E", end_color="1A3C6E", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+
+    # Data rows
+    total_cost = 0
+    total_value = 0
+
+    for pos in IRA_POSITIONS:
+        row += 1
+        current_price = get_price(pos["ticker"], pos["entry_price"])
+        shares = pos["shares"]
+        entry_price = pos["entry_price"]
+        market_value = shares * current_price
+        cost = shares * entry_price
+        pnl = market_value - cost
+        pnl_pct = pnl / cost if cost > 0 else 0
+
+        total_cost += cost
+        total_value += market_value
+
+        ws.cell(row=row, column=1, value=pos["ticker"]).font = Font(bold=True)
+        ws.cell(row=row, column=2, value=pos["name"])
+        ws.cell(row=row, column=3, value=shares).number_format = "#,##0"
+        ws.cell(row=row, column=4, value=entry_price).number_format = "$#,##0.00"
+        ws.cell(row=row, column=5, value=pos["entry_date"])
+        ws.cell(row=row, column=6, value=current_price).number_format = "$#,##0.00"
+        ws.cell(row=row, column=7, value=market_value).number_format = "$#,##0.00"
+
+        pnl_cell = ws.cell(row=row, column=8, value=pnl)
+        pnl_cell.number_format = "$#,##0.00"
+        pnl_cell.font = Font(color="1B7A2B" if pnl >= 0 else "C62828")
+
+        pct_cell = ws.cell(row=row, column=9, value=pnl_pct)
+        pct_cell.number_format = "0.0%"
+        pct_cell.font = Font(color="1B7A2B" if pnl_pct >= 0 else "C62828")
+
+        ws.cell(row=row, column=10, value=pos["thesis"][:60])
+
+    # Totals
+    row += 2
+    ws.cell(row=row, column=1, value="TOTAL").font = Font(bold=True)
+    ws.cell(row=row, column=7, value=total_value).number_format = "$#,##0.00"
+    ws.cell(row=row, column=7).font = Font(bold=True)
+    total_pnl = total_value - total_cost
+    ws.cell(row=row, column=8, value=total_pnl).number_format = "$#,##0.00"
+    ws.cell(row=row, column=8).font = Font(bold=True,
+                                            color="1B7A2B" if total_pnl >= 0 else "C62828")
+
+    # Falsification criteria section
+    row += 3
+    ws.cell(row=row, column=1, value="Falsification Criteria").font = \
+        Font(name="Calibri", size=12, bold=True, color="1A3C6E")
+    for pos in IRA_POSITIONS:
+        row += 1
+        ws.cell(row=row, column=1, value=pos["ticker"]).font = Font(bold=True)
+        ws.cell(row=row, column=2, value=pos["falsification"])
+
+    # Column widths
+    widths = [8, 20, 10, 12, 12, 12, 14, 14, 10, 60]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    n_positions = len(IRA_POSITIONS)
+    total_shares = sum(p["shares"] for p in IRA_POSITIONS)
+    return n_positions, total_shares, total_cost, total_value
+
+
+# ============================================================================
 # MAIN: BUILD WORKBOOK WITH ALL SHEETS
 # ============================================================================
 
@@ -2160,17 +2270,21 @@ def build_spreadsheet(output_path):
     ws5 = wb.create_sheet("UPRO DD25-Cool40")
     upro_results = build_upro_sheet(ws5, today)
 
+    # Sheet 6: IRA Equity Positions (Software Thesis + Other)
+    ws6 = wb.create_sheet("IRA Equity Positions")
+    ira_results = build_ira_positions_sheet(ws6, today)
+
     wb.save(output_path)
     print(f"\nSaved: {output_path}")
     return (delta_results, pcs_results, pcs_live_results,
-            tsla_results, upro_results)
+            tsla_results, upro_results, ira_results)
 
 
 if __name__ == "__main__":
     out_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(out_dir, "position_tracker.xlsx")
     (delta_results, pcs_results, pcs_live_results,
-     tsla_results, upro_results) = build_spreadsheet(out_path)
+     tsla_results, upro_results, ira_results) = build_spreadsheet(out_path)
 
     cost, value, pnl, delta_exp, contracts = delta_results
     print(f"\n--- 80-Delta Calls ---")
@@ -2196,3 +2310,8 @@ if __name__ == "__main__":
     print(f"\n--- UPRO DD25/Cool40 ---")
     print(f"Shares: {upro_shares:,}  |  Cost: ${upro_cost:,.0f}  |  Value: ${upro_val:,.0f}  |  P&L: ${upro_pnl:+,.0f}")
     print(f"Status: {upro_status}")
+
+    n_ira, ira_shares, ira_cost, ira_value = ira_results
+    print(f"\n--- IRA Equity Positions ---")
+    print(f"Positions: {n_ira}  |  Shares: {ira_shares:,}")
+    print(f"Cost: ${ira_cost:,.0f}  |  Value: ${ira_value:,.0f}  |  P&L: ${ira_value-ira_cost:+,.0f}")
